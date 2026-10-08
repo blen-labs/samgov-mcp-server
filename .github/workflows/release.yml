@@ -21,6 +21,9 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      released: ${{ steps.cut.outputs.released }}
+      version: ${{ steps.cut.outputs.version }}
     permissions:
       contents: write
       packages: write
@@ -106,3 +109,10 @@ jobs:
           if ! gh release view "v$VERSION" >/dev/null 2>&1; then
             gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file "$NOTES_FILE" "${FLAGS[@]}"
           fi
+  deploy:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tag: v${{ needs.release.outputs.version }}
+    secrets: inherit

@@ -137,7 +137,7 @@ Inspector setup and examples: [development guide](./docs/development.md). Archit
 
 Following [FedReg's release pattern](https://github.com/blen-labs/fedreg-mcp-server), every merge to `main` creates a SemVer release: breaking changes bump major, `feat` bumps minor, other conventional commits bump patch. The initial release uses the version in `package.json`.
 
-CI runs before version stamping, an annotated `vX.Y.Z` tag, GitHub release notes, and a versioned container image. Release recovery and optional Railway deployment are documented in [releasing](./docs/releases.md). No npm publishing is configured: this project ships a hosted service container and source releases.
+CI runs before version stamping, an annotated `vX.Y.Z` tag, GitHub release notes, and a versioned container image. Automatic Railway deployment and release recovery are documented in [releasing](./docs/releases.md). No npm publishing is configured: this project ships a hosted service container and source releases.
 
 ## Security and contributing
 

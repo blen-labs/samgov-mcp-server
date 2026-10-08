@@ -15,7 +15,7 @@ The service must use persistent encryption, signing, Better Auth, and cookie sec
 
 ## Continuous delivery
 
-`.github/workflows/deploy.yml` is a **manual, tag-based deployment**. Create a GitHub environment named `production`, with the repository's desired reviewers and deployment branch/tag rules, and configure:
+`.github/workflows/deploy.yml` deploys the exact published tag automatically after the Release workflow succeeds. It also supports manual dispatch for a redeploy or rollback. Create a GitHub environment named `production`, with the repository's desired reviewers and deployment branch/tag rules, and configure:
 
 | Environment value        | Kind                                   |
 | ------------------------ | -------------------------------------- |
@@ -24,9 +24,9 @@ The service must use persistent encryption, signing, Better Auth, and cookie sec
 | `RAILWAY_ENVIRONMENT_ID` | Variable: Railway environment ID       |
 | `DEPLOY_URL`             | Variable: public HTTPS origin          |
 
-Choose a published `vX.Y.Z` in **Actions → Deploy Railway**. The workflow checks out that exact tag, reruns verification, deploys using the pinned CLI, and checks public health plus unauthenticated MCP rejection. Those checks do not prove Google, SAM.gov, or Gemini acceptance; run those separately before treating the release as ready for users.
+Merges to `main` run CI, create a release, and then deploy its published `vX.Y.Z`. For a manual redeploy or rollback, choose a published tag in **Actions → Deploy Railway**. The workflow checks out that exact tag, reruns verification, deploys using the pinned CLI, and checks public health plus unauthenticated MCP rejection. Those checks do not prove Google, SAM.gov, or Gemini acceptance; run those separately before treating the release as ready for users.
 
-Repository secrets and environment protection are not created by adding YAML. The initial open-source preparation does not configure GitHub or Railway account settings.
+Repository secrets and environment protection are not created by adding YAML. A deployment requires these account-level settings in addition to the checked-in workflows.
 
 ## Rollback
 
