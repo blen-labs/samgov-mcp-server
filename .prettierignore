@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.local/
+.release/
+.git/
+.env*
+coverage/
+data/
+LICENSE
+package-lock.json

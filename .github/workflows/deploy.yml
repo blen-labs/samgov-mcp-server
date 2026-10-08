@@ -1,0 +1,52 @@
+name: Deploy Railway
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to deploy or roll back to (vX.Y.Z)'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: railway-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          gh release view "$TAG" >/dev/null
+          git checkout --detach "refs/tags/$TAG"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run verify
+      - name: Deploy selected release
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_PROJECT_TOKEN }}
+          RAILWAY_SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID }}
+          RAILWAY_ENVIRONMENT_ID: ${{ vars.RAILWAY_ENVIRONMENT_ID }}
+        run: |
+          test -n "$RAILWAY_TOKEN"
+          test -n "$RAILWAY_SERVICE_ID"
+          test -n "$RAILWAY_ENVIRONMENT_ID"
+          npx --yes @railway/cli@5.64.0 up --ci --service "$RAILWAY_SERVICE_ID" --environment "$RAILWAY_ENVIRONMENT_ID"
+      - name: Verify public transport is healthy and protected
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: node scripts/check-deployment.mjs

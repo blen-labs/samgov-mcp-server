@@ -3,9 +3,18 @@ import { hostHeaderValidation } from '@modelcontextprotocol/node';
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => void | Promise<void>;
 
-export function requestListener(publicUrl: string, app: Handler, broker?: Handler): RequestListener {
+export function requestListener(
+  publicUrl: string,
+  app: Handler,
+  broker?: Handler,
+): RequestListener {
   const address = new URL(publicUrl);
-  const validateHost = hostHeaderValidation([address.hostname, 'localhost', '127.0.0.1', 'healthcheck.railway.app']);
+  const validateHost = hostHeaderValidation([
+    address.hostname,
+    'localhost',
+    '127.0.0.1',
+    'healthcheck.railway.app',
+  ]);
   return (request, response) => {
     const dispatch = async () => {
       if (!validateHost(request, response)) return;
@@ -17,11 +26,23 @@ export function requestListener(publicUrl: string, app: Handler, broker?: Handle
         return;
       }
       const path = new URL(request.url, address).pathname;
-      if (broker && !['/mcp', '/admin/credential', '/healthz', '/.well-known/oauth-protected-resource/mcp'].includes(path)) await broker(request, response);
+      if (
+        broker &&
+        ![
+          '/mcp',
+          '/admin/credential',
+          '/healthz',
+          '/.well-known/oauth-protected-resource/mcp',
+        ].includes(path)
+      )
+        await broker(request, response);
       else await app(request, response);
     };
     void dispatch().catch(() => {
-      if (response.headersSent) { response.destroy(); return; }
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
       response.writeHead(500, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       response.end('{"error":"internal_error"}');
     });

@@ -18,7 +18,15 @@
     "test:live-sam": "tsx scripts/live-sam.ts",
     "build": "tsc",
     "test": "tsx --test test/*.test.ts",
-    "check": "npm run build && npm test"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:unit && npm run build",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
+    "lint": "biome lint src scripts test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:unit": "tsx --test test/*.test.ts && node --test test/*.test.mjs",
+    "test:all": "tsx --test test/*.test.ts test/*.integration.ts && node --test test/*.test.mjs",
+    "release:prepare": "node scripts/release.mjs",
+    "check:public": "node scripts/check-public-files.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.1.1",
@@ -30,13 +38,25 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/inspector": "2.10.1",
     "@types/node": "26.6.4",
     "@types/oidc-provider": "9.12.1",
     "@types/pg": "8.23.1",
+    "prettier": "3.9.9",
     "tough-cookie": "6.0.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
+  },
+  "license": "Apache-2.0",
+  "author": "BLEN, Inc. (https://blenlabs.com)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blen-labs/samgov-mcp-server.git"
+  },
+  "homepage": "https://github.com/blen-labs/samgov-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/blen-labs/samgov-mcp-server/issues"
   }
 }

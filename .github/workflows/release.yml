@@ -1,0 +1,108 @@
+name: Release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      recover_tag:
+        description: 'Recovery only: existing vX.Y.Z tag whose image/release publication failed'
+        type: string
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'chore(release):')
+    uses: ./.github/workflows/ci.yml
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Select main or an existing recovery tag
+        env:
+          RECOVER_TAG: ${{ inputs.recover_tag }}
+        run: |
+          if [ -n "$RECOVER_TAG" ]; then
+            [[ "$RECOVER_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+            git rev-parse --verify "refs/tags/$RECOVER_TAG^{commit}"
+            git checkout --detach "refs/tags/$RECOVER_TAG"
+          else
+            test "$GITHUB_REF" = refs/heads/main
+            git fetch origin main
+            test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Prepare version and release notes
+        id: cut
+        env:
+          RECOVER_TAG: ${{ inputs.recover_tag }}
+        run: |
+          if [ -n "$RECOVER_TAG" ]; then
+            node scripts/recover-release.mjs "$RECOVER_TAG"
+          else
+            npm run release:prepare
+          fi
+      - name: Validate the exact release content
+        if: steps.cut.outputs.released == 'true'
+        run: |
+          npm run check
+          npm run verify
+          npm run check:public
+      - name: Create local release commit and annotated tag
+        if: steps.cut.outputs.released == 'true' && inputs.recover_tag == ''
+        env:
+          VERSION: ${{ steps.cut.outputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json src/version.ts CHANGELOG.md
+          git commit -m "chore(release): v${VERSION}"
+          git tag -a "v${VERSION}" -m "v${VERSION}"
+      - name: Build the versioned release image before publishing anything
+        if: steps.cut.outputs.released == 'true'
+        env:
+          VERSION: ${{ steps.cut.outputs.version }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker build --target runtime --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" --label "org.opencontainers.image.version=$VERSION" -t "$IMAGE:$VERSION" .
+          docker run --rm --entrypoint node "$IMAGE:$VERSION" --input-type=module -e "import { VERSION } from './dist/version.js'; if (VERSION !== process.argv[1] || process.getuid() === 0) process.exit(1)" "$VERSION"
+      - name: Atomically publish the release commit and tag
+        if: steps.cut.outputs.released == 'true' && inputs.recover_tag == ''
+        env:
+          VERSION: ${{ steps.cut.outputs.version }}
+        run: git push --atomic origin HEAD:refs/heads/main "refs/tags/v${VERSION}:refs/tags/v${VERSION}"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: steps.cut.outputs.released == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish versioned image and GitHub release
+        if: steps.cut.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.cut.outputs.version }}
+          NOTES_FILE: ${{ steps.cut.outputs.notes_file }}
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker push "$IMAGE:$VERSION"
+          FLAGS=()
+          if [[ "$VERSION" == 0.* ]]; then FLAGS+=(--prerelease); fi
+          if ! gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file "$NOTES_FILE" "${FLAGS[@]}"
+          fi
