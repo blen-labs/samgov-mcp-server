@@ -47,7 +47,7 @@ This is a **remote HTTP service**, not a stdio server or an `npx` desktop packag
 4. Sign in using the invited account. An organization administrator supplies the SAM.gov key on the consent page, then authorizes the connection.
 5. Search using posted dates. Members can use the stored organization key without seeing it.
 
-Get the **SAM.gov personal API key** from your SAM.gov Account Details. Do not assume a general api.data.gov key works for this API. Never place the SAM.gov key in a prompt, MCP tool arguments, connector URL, or Inspector headers.
+For this shared organization connection, use a **SAM.gov system-account API key** authorized for your organization’s public opportunity searches. Do not enter a personal key: this service uses one key for all authorized organization members. Ask your SAM.gov system-account manager for the appropriate key; setup guidance is in [SAM.gov Help](https://sam.gov/help) under **Using Data Services → APIs**. Do not assume a general api.data.gov key works for this API. Never place the SAM.gov key in a prompt, MCP tool arguments, connector URL, or Inspector headers.
 
 ### Gemini Enterprise
 

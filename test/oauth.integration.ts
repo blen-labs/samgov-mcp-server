@@ -234,7 +234,7 @@ for (const publicClient of [false, true])
         let consent = await signedIn.res.text();
         assert.match(consent, /Organization A/);
         assert.ok(consent.includes(`Authorize ${publicClient ? 'Inspector Test' : 'Gemini Test'}`));
-        assert.match(consent, /Organization SAM.gov API key/);
+        assert.match(consent, /SAM.gov system-account API key/);
         const consentId = uid(consent)!;
         const csrfRejected = await browser(`${origin}/interaction/${consentId}/confirm`, {
           method: 'POST',
