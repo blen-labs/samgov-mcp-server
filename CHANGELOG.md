@@ -5,6 +5,10 @@ A version tag records software changes; it does not certify live SAM.gov or Gemi
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-08
+
+- docs: record successful hosted release and Railway deployment
+
 ## [0.1.0] - 2026-10-08
 
 - ci: deploy each verified release tag to Railway production
