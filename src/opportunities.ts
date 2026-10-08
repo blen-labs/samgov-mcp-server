@@ -35,6 +35,7 @@ export const opportunityInput = z.object({
   if (!start || !end) return;
   const maximum = new Date(start);
   maximum.setUTCFullYear(maximum.getUTCFullYear() + 1);
+  if (maximum.getUTCMonth() !== start.getUTCMonth()) maximum.setUTCDate(0);
   if (end < start || end > maximum) ctx.addIssue({ code: 'custom', path: ['posted_to'], message: 'Date range must be ordered and no longer than one year' });
 });
 
@@ -84,6 +85,7 @@ export async function searchOpportunities(input: OpportunityInput, apiKey: strin
     // Fetch exceptions can include the URL containing the secret. Never propagate them.
     throw new SamError('UPSTREAM_UNAVAILABLE', 'SAM.gov could not be reached or the request was cancelled.');
   }
+  if (!response.ok) await response.body?.cancel().catch(() => {});
   if (response.status === 401 || response.status === 403) throw new SamError('KEY_REJECTED', 'SAM.gov rejected this key or its access permissions. Reconnect with a valid SAM.gov key.');
   if (response.status === 429) {
     const raw = response.headers.get('retry-after');
@@ -110,6 +112,8 @@ export async function searchOpportunities(input: OpportunityInput, apiKey: strin
       await reader.cancel();
     }
     data = upstreamResponse.parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+    if ((data.totalRecords === 0 && data.opportunitiesData.length > 0) ||
+        (args.offset * args.limit < data.totalRecords && data.opportunitiesData.length === 0)) throw new Error();
   } catch {
     throw new SamError('INVALID_RESPONSE', 'SAM.gov returned an invalid or oversized response; no results can be confirmed.');
   }
@@ -118,10 +122,12 @@ export async function searchOpportunities(input: OpportunityInput, apiKey: strin
     for (const field of fields) {
       const value = item[field];
       if (typeof value === 'string') result[field] = value.split(apiKey).join('[REDACTED]').slice(0, 5000);
-      else if (typeof value === 'number' || typeof value === 'boolean' || value === null) result[field] = value;
+      else if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+        result[field] = String(value).includes(apiKey) ? '[REDACTED]' : value;
+      }
     }
-    if (typeof item.noticeId === 'string' && /^[a-fA-F0-9]{32}$/.test(item.noticeId)) {
-      result.url = `https://sam.gov/opp/${item.noticeId}/view`;
+    if (typeof result.noticeId === 'string' && /^[a-fA-F0-9]{32}$/.test(result.noticeId)) {
+      result.url = `https://sam.gov/opp/${result.noticeId}/view`;
     }
     return result;
   });

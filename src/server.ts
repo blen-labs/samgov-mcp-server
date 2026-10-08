@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { hostHeaderValidation, toNodeHandler } from '@modelcontextprotocol/node';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import pg from 'pg';
 import { createApp } from './app.js';
 import { tokenVerifier } from './auth.js';
@@ -8,6 +8,7 @@ import { TenantStore } from './tenant-store.js';
 import { OAuthStore } from './oauth-store.js';
 import { createBroker } from './oauth.js';
 import { createLogin } from './better-login.js';
+import { requestListener } from './http.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -47,17 +48,7 @@ async function main() {
       return !!membership && await oauth.allow(`tenant:${membership.tenantId}`, 60, 60);
     },
   }));
-  const validateHost = hostHeaderValidation([publicAddress.hostname, 'localhost', '127.0.0.1', 'healthcheck.railway.app']);
-  const server = createServer((request, response) => {
-    if (!validateHost(request, response)) return;
-    const path = new URL(request.url!, publicAddress).pathname;
-    const action = broker && !['/mcp', '/admin/credential', '/healthz', '/.well-known/oauth-protected-resource/mcp'].includes(path)
-      ? broker.handle(request, response) : handler(request, response);
-    void Promise.resolve(action).catch(() => {
-      if (!response.headersSent) response.writeHead(500, { 'Content-Type': 'application/json' });
-      response.end('{"error":"internal_error"}');
-    });
-  });
+  const server = createServer(requestListener(publicUrl, handler, broker?.handle));
   server.requestTimeout = 40000;
   server.headersTimeout = 10000;
   const port = Number(process.env.PORT ?? 3000);
@@ -72,5 +63,6 @@ async function main() {
 
 main().catch(() => {
   console.error('Startup failed. Check the required configuration, OAuth URLs, encryption key format, and database connectivity.');
-  process.exitCode = 1;
+  // Failed startup must terminate even if a pool/timer was already created.
+  process.exit(1);
 });

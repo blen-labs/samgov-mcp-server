@@ -47,3 +47,22 @@ test('concurrent users keep independent credentials', async () => {
   await Promise.all(['alice', 'bob'].map(key => searchOpportunities(input, key, fetcher)));
   assert.deepEqual(seen.sort(), ['alice', 'bob']);
 });
+
+test('redacts keys reflected in notice identifiers, numeric fields, and synthesized URLs', async () => {
+  const key = '12345678';
+  const result = await searchOpportunities(input, key, async () => Response.json({ totalRecords: 30, opportunitiesData: [{ noticeId: key.repeat(4), title: key, solicitationNumber: Number(key) }] }));
+  assert.ok(!JSON.stringify(result).includes(key));
+  assert.equal(result.opportunities[0]?.url, undefined);
+});
+
+test('cancels error response bodies and rejects contradictory or oversized results', async () => {
+  let cancelled = false;
+  await assert.rejects(searchOpportunities(input, 'test-secret', async () => new Response(new ReadableStream({cancel() {cancelled = true;}}), {status:429})), /rate limit/);
+  assert.equal(cancelled, true);
+  for (const data of [{totalRecords:30,opportunitiesData:[]}, {totalRecords:0,opportunitiesData:[{title:'unexpected'}]}]) {
+    await assert.rejects(searchOpportunities(input, 'test-secret', async () => Response.json(data)), /invalid or oversized/);
+  }
+  await assert.rejects(searchOpportunities(input, 'test-secret', async () => new Response('x'.repeat(5_000_001))), /invalid or oversized/);
+  assert.equal(opportunityInput.safeParse({...input,posted_from:'02/29/2024',posted_to:'03/01/2025'}).success, false);
+  assert.equal(opportunityInput.safeParse({...input,posted_from:'02/29/2024',posted_to:'02/28/2025'}).success, true);
+});
