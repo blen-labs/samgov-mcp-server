@@ -5,6 +5,10 @@ A version tag records software changes; it does not certify live SAM.gov or Gemi
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-10-08
+
+- docs: publish hosted privacy policy and terms
+
 ## [0.1.4] - 2026-10-08
 
 - fix: explain organization API keys during authorization
