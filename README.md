@@ -1,122 +1,152 @@
-# SAM.gov opportunities MCP server
+# SAM.gov MCP Server
 
-One hosted service, multiple organizations, one encrypted SAM.gov API key per tenant. The only tool is `get_sam_opportunities`, extracted from [Capture MCP](https://github.com/blencorp/capture-mcp-server). Other Data.gov APIs, entities, exclusions, and attachment downloads are outside its scope.
+[![CI](https://github.com/blen-labs/samgov-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/blen-labs/samgov-mcp-server/actions/workflows/ci.yml)
+[![license: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
+[![Node](https://img.shields.io/badge/node-24%20LTS-339933.svg)](https://nodejs.org/)
+[![MCP](https://img.shields.io/badge/MCP-2026--07--28-7c3aed.svg)](https://modelcontextprotocol.io/specification/2026-07-28)
 
-## Authentication and organization access
+**Search U.S. federal contract opportunities from your AI assistant, using your organization's own SAM.gov API key.**
 
-**Better Auth 1.7.7** manages Google sign-in, invite-only email/password accounts, and database-backed sessions. Google sign-in accepts invited Google accounts without requiring a Google Workspace domain. It requires a Google web OAuth client configured with `PUBLIC_URL/account/auth/callback/google`. `oidc-provider` handles the separate OAuth authorization server used by Gemini Enterprise: confidential clients, PKCE S256, consent, resource-bound opaque access tokens, rotating refresh tokens, and revocation. Better Auth is the login layer; this implementation does not use its OAuth Provider plugin.
+A hosted [Model Context Protocol](https://modelcontextprotocol.io) server for the [SAM.gov public opportunities API](https://open.gsa.gov/api/get-opportunities-public-api/). One deployment serves multiple organizations. Google sign-in is handled by Better Auth; organization invitations and membership checks control access. Each organization's key is encrypted separately and used only on the server.
 
-1. The service operator creates a tenant and a confidential Gemini OAuth client, then invites an administrator.
-2. Invited Google users select **Continue with Google**; their verified identity creates their account on first sign-in. Email/password users instead receive a private account setup link prepared by the operator. It expires after one hour, works once, and is delivered manually. The service sends no email. Password recovery uses the same operator-only command.
-3. In Gemini, an invited user starts the connector, signs in, and authorizes access for the organization bound to that connector's OAuth client.
-4. The tenant administrator enters the organization's SAM.gov key in the consent page. Members can use the stored key but cannot view or replace it.
-5. Gemini receives its own OAuth token. Each MCP request checks the token, client-to-tenant binding, enabled membership, and tenant key.
+> **Preview status:** automated tests and deployed Inspector authentication pass. Live SAM.gov searches returned an empty upstream HTTP 404 on October 8, 2026, and the actual Gemini Enterprise connector has not completed acceptance. This is not yet a production-validated release. See [verification status](./docs/verification.md).
 
-Public email/password signup and Better Auth admin/account-linking APIs are not mounted. The only exposed Better Auth callback is Google’s callback; sign-in starts through a CSRF-protected form tied to the Gemini authorization request. Google email must be verified, and the account must have an active invitation or membership. Existing email/password accounts must first complete their private setup/recovery link before Google can link to them; the default protection against linking an unverified local account remains enabled. Passwords use Better Auth's password hashing; recovery revokes existing login sessions and delegated OAuth grants. Access does not depend on matching email domains. The tenant membership database remains authoritative; no caller-provided tenant ID or claim selects a key. Disabled memberships are checked on every tool request.
+Independent open-source software, not affiliated with or endorsed by the U.S. government.
 
-API keys and OAuth records are encrypted with AES-256-GCM, fresh nonces, and authenticated tenant/record binding. Encryption keys live in Railway secrets separately from PostgreSQL. Retain old key-ring entries until stored values have been re-encrypted. There is no global SAM.gov key fallback. Better Auth stores password hashes and session records in separate `ba_*` tables.
+## What you can ask
 
-## Protocol and client configuration
+- “Find recent SAM.gov opportunities with ‘software’ in the title.”
+- “Show Virginia opportunities under NAICS 541512 posted this week.”
+- “Get the next page of these opportunities.”
+- “Find the opportunity with this notice ID.”
 
-Uses the stable TypeScript SDK v2 and [MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28). Modern calls need no initialization or session identifier. The SDK's stateless legacy compatibility mode also accepts 2025-era initialization. GET/DELETE and subscriptions on `/mcp` are rejected. MCP requests need no sticky routing; credentials, identities, OAuth grants, and rate limits persist in PostgreSQL.
+The assistant translates the question into `get_sam_opportunities`. The server validates the filters, selects the key belonging to the authenticated organization, and calls SAM.gov. It does not run an LLM or execute user-supplied code.
 
-Configure Gemini Enterprise using the private file produced by `create-tenant`:
+## Features
 
-| Setting | Value |
-| --- | --- |
-| MCP URL | `PUBLIC_URL/mcp` |
-| Authorization URL | `PUBLIC_URL/oauth/authorize` |
-| Token URL | `PUBLIC_URL/oauth/token` |
-| Redirect URI | `https://vertexaisearch.cloud.google.com/oauth-redirect` |
-| Scopes | `openid offline_access sam:opportunities:read` |
-| PKCE | Enabled, S256 |
-| Client ID / secret | Unique confidential client for this tenant |
+- **SAM.gov opportunities only:** title, organization, NAICS, state, procurement type, set-aside, solicitation number, and notice-ID filters.
+- **Bring your own key:** one encrypted SAM.gov credential per organization, shared by its authorized members.
+- **Google sign-in:** an invited, verified Google account signs in through Better Auth. Workspace is not required. Operator-managed password setup is also available.
+- **Stateless MCP:** MCP `2026-07-28` request/response transport, plus stateless legacy compatibility. No sticky routing or MCP session IDs.
+- **Durable authorization:** PostgreSQL stores tenant memberships, encrypted OAuth grants, and rate limits.
+- **Development Inspector:** a local, authenticated Inspector UI and a repeatable deployed acceptance command.
 
-Follow Google's [custom MCP connector guide](https://docs.cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server), including the FQDN organization-policy allowlist. Google's guide does not specify the accepted MCP revision; passing SDK tests alone does not establish live Gemini acceptance.
+## Connect your assistant
 
-## Operations
+This is a **remote HTTP service**, not a stdio server or an `npx` desktop package. First deploy it or obtain a connector configuration from your service administrator.
 
-Requires Node.js 24 LTS and PostgreSQL. Set the variables in `.env.example` through the host's secret configuration. Do not put secrets in command arguments, source control, shell history, or logs.
+1. Ask the administrator to create your organization and invite your email address.
+2. Configure the remote connector with the administrator's private client configuration.
+3. Start the connection in your MCP client and choose **Continue with Google**.
+4. Sign in using the invited account. An organization administrator supplies the SAM.gov key on the consent page, then authorizes the connection.
+5. Search using posted dates. Members can use the stored organization key without seeing it.
 
-| Variable | Purpose |
-| --- | --- |
-| `PUBLIC_URL` | Public HTTPS origin |
-| `DATABASE_URL` | Railway reference to the private PostgreSQL service |
-| `AUTH_MODE` | `better-auth` (default) |
-| `BETTER_AUTH_SECRET` | Persistent random secret of at least 43 characters |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google web OAuth credentials; set both to enable Google sign-in |
-| `OAUTH_SIGNING_JWKS` | Persistent private signing-key set |
-| `OAUTH_COOKIE_KEYS` | JSON array of persistent random cookie-signing keys |
-| `ACTIVE_ENCRYPTION_KEY_ID` | Active encryption key-ring identifier |
-| `ENCRYPTION_KEYS_JSON` | Secret map of identifiers to random 32-byte base64 keys |
+Get the **SAM.gov personal API key** from your SAM.gov Account Details. Do not assume a general api.data.gov key works for this API. Never place the SAM.gov key in a prompt, MCP tool arguments, connector URL, or Inspector headers.
 
-Startup applies additive schema migrations under advisory locks. The Docker image runs as a non-root user and listens on Railway's `PORT`. `/healthz` reports process health, not successful SAM.gov or Gemini access.
+### Gemini Enterprise
 
-Operator commands run with the same private environment as the service:
+The initial operator command creates a confidential client with Google's documented callback:
 
-```sh
-npm run manage -- create-tenant 'Organization Name' admin@example.com /private/new-connector.json
-npm run manage -- setup-account admin@example.com 'Administrator Name' /private/new-setup.json
-npm run manage -- invite TENANT_UUID member@example.com member
-npm run manage -- setup-account member@example.com 'Member Name' /private/member-setup.json
-npm run manage -- list-tenants
-npm run manage -- list-members TENANT_UUID
-npm run manage -- disable-member TENANT_UUID ACCOUNT_UUID
-npm run manage -- revoke-tenant TENANT_UUID
+| Setting              | Value                                                    |
+| -------------------- | -------------------------------------------------------- |
+| MCP URL              | `https://your-service.example/mcp`                       |
+| Authorization URL    | `https://your-service.example/oauth/authorize`           |
+| Token URL            | `https://your-service.example/oauth/token`               |
+| Redirect URI         | `https://vertexaisearch.cloud.google.com/oauth-redirect` |
+| Scopes               | `openid offline_access sam:opportunities:read`           |
+| PKCE                 | Required, S256                                           |
+| Client ID and secret | From the operator-generated private file                 |
+
+Follow Google's [custom MCP connector setup](https://docs.cloud.google.com/gemini/enterprise/docs/connectors/custom-mcp-server/set-up-custom-mcp-server), including its domain allowlist. Successful Inspector tests do not establish Gemini compatibility. Other clients need their own registered callback; dynamic client registration is disabled.
+
+## Tool reference
+
+One read-only tool: **`get_sam_opportunities`**.
+
+```json
+{
+  "posted_from": "10/01/2026",
+  "posted_to": "10/08/2026",
+  "keyword": "software",
+  "naics": "541512",
+  "limit": 10,
+  "offset": 0
+}
 ```
 
-In the production image use `node dist/manage.js` instead of `npm run manage --`. Output files must be new paths; they are created with mode 0600. Account setup links are credentials: deliver them privately to the intended person. The link's token is in the URL fragment and removed from browser history by the setup page. Setup and consent forms use bound, one-use CSRF tokens. Sign-in attempts are limited per email, OAuth traffic per connecting IP, and searches per tenant. Railway's proxy may aggregate IP-based quotas; per-email and per-tenant limits remain independent.
+Use current dates for a live search. `keyword` searches **titles only**, not descriptions or attachments.
 
-Optional `AUTH_MODE=external` supports an existing JWT authorization server using `OAUTH_ISSUER` and `OAUTH_JWKS_URI`. Tokens require RS256/ES256 signatures, exact issuer and `PUBLIC_URL/mcp` audience, subject, expiry, issued-at time, client ID, and scopes. Its separately provisioned admin tokens can call `POST /admin/credential` with `sam:credentials:write`; built-in Better Auth users manage keys through consent instead.
+| Inputs                                        | Rules                                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `posted_from`, `posted_to`                    | Required `MM/dd/yyyy`; ordered, at most one year apart                                         |
+| `keyword`, `notice_id`, `solicitation_number` | Optional text filters                                                                          |
+| `organization_name`, `organization_code`      | Optional agency/organization filters                                                           |
+| `procurement_type`, `set_aside`               | SAM.gov codes; see [API documentation](https://open.gsa.gov/api/get-opportunities-public-api/) |
+| `state`, `naics`, `classification_code`       | Optional place-of-performance state, NAICS, and classification filters                         |
+| `limit`                                       | 1–100; default 10                                                                              |
+| `offset`                                      | Zero-based **page index**, default 0; use returned `next_offset`                               |
 
-## Search behavior
+Results include `total`, `opportunities`, `date_range`, `retrieved_at`, and `next_offset`. Only selected public fields and safe notice links are returned. Descriptions, attachments, entities, exclusions, and historical notice versions are outside this server's scope. Notice text is untrusted data, never instructions.
 
-The [GSA public opportunities API](https://open.gsa.gov/api/get-opportunities-public-api/) requires a SAM.gov personal key and posted dates in `MM/dd/yyyy`, with a maximum one-year range. Filters include title keyword, notice ID, solicitation number, organization name/code, procurement type, set-aside, state, NAICS, and classification code. `keyword` searches titles only. `offset` is a zero-based page index; use `next_offset` to continue. Results are limited to 100 per page. Upstream failures remain explicit tool errors, never empty successes.
+Upstream errors are explicit MCP tool errors (`isError: true`), not empty success results. Saving a key does not validate it. See [troubleshooting](./docs/operations.md#troubleshooting).
 
-Keys never appear in MCP schemas, tool results, or raw error messages. SAM.gov requires its key in the upstream query string, so outbound URL logging must remain disabled. Saving a key does not validate it with SAM.gov.
+## Self-hosting
 
-## Verification and remaining acceptance
+Requires Node.js **24 LTS**, PostgreSQL **17 or 18**, and a public HTTPS origin. Railway is the initial deployment target. All organizations in one deployment must use the same database and persistent encryption/signing configuration.
+
+```sh
+git clone https://github.com/blen-labs/samgov-mcp-server.git
+cd samgov-mcp-server
+npm ci
+npm run build
+node scripts/init-env.mjs https://your-service.example .env
+```
+
+The last command creates a **new private file** containing generated secrets; it never prints their values. Set `DATABASE_URL` and Google OAuth credentials privately, then follow the [Railway deployment guide](./docs/railway.md). `.env` is ignored and is not loaded automatically; local operator commands use Node's `--env-file` flag.
+
+Google's authorized redirect URI must be:
+
+```text
+https://your-service.example/account/auth/callback/google
+```
+
+Create the first organization using the service's environment:
+
+```sh
+mkdir -p .local
+node --env-file=.env dist/manage.js create-tenant 'Example Organization' admin@example.com .local/new-connector.json
+```
+
+Deliver that connector file privately to its administrator. It contains a client secret. Tenant UUIDs are returned in that file. Additional invitations, access revocation, key rotation, backups, and the optional external JWT mode are covered in [operations](./docs/operations.md).
+
+## Development and testing
 
 ```sh
 npm ci
-npm run check     # build + unit tests; the PG test skips without TEST_DATABASE_URL
-npm run verify    # full suite inside Node 24 LTS, with isolated real PostgreSQL
-npm run test:live-sam  # requires SAM_GOV_API_KEY from a private environment
+npm run check       # formatting, lint, typecheck, unit tests, build
+npm run verify      # complete suite in Docker with isolated PostgreSQL; no skipped DB tests
+npm run inspector   # after provisioning a separate development client
+npm run test:deployed # uses the Inspector's saved OAuth grant; requires real SAM.gov access
 ```
 
-The container suite covers Google authorization redirects and signed callback fixtures (state, PKCE, audience, email verification, invitation enforcement, account linking and replay), Better Auth account setup and password hashing, recovery replay/expiry/concurrency, real HTTP OAuth consent and PKCE, token persistence across server instances, refresh rotation, revoked/disabled access, tenant isolation, key replacement, encryption/tamper checks, upstream failures/redaction, and both modern and legacy official MCP clients. SAM.gov responses in the automated suite are simulated. Tests must never target the production database. Source fingerprints and sanitized gate results are written under ignored `.local/`.
+`npm run check` does not prove database or external-service behavior. `npm run verify` uses simulated SAM.gov responses and Google identity fixtures. `npm run test:deployed` requires a real browser login and checks discovery, invalid input, live search, distinct pagination, and notice lookup; it exits nonzero when acceptance is incomplete.
 
-Browser acceptance has completed using real Better Auth sign-in with a disposable local account and simulated SAM.gov data. A separate production browser test authenticated the invited BLEN administrator with Google and reached the tenant key-entry/consent page. The Google client is configured in Railway; its Cloud project is currently External / Testing, so broader organization rollout still needs audience and branding review. **End-to-end production acceptance remains incomplete:** live Google sign-in succeeded on October 7, 2026, reaching BLEN tenant consent with an enabled administrator membership; the live SAM.gov endpoint last returned HTTP 404, and the actual Gemini Enterprise connector has not completed a live search. A healthy Railway service or passing automated suite must not be reported as proof that those external integrations work.
+Inspector setup and examples: [development guide](./docs/development.md). Architecture and trust boundaries: [architecture](./docs/architecture.md). Findings and verification limits: [review record](./docs/verification.md).
 
-## Development MCP Inspector
+## Releases and deployment
 
-The official Inspector 2.10.1 is pinned as a dev dependency; it is excluded from the production runtime image. The UI runs locally and tests the deployed `/mcp` endpoint through the same Google sign-in, tenant membership, consent, and encrypted key lookup used by other clients.
+Following [FedReg's release pattern](https://github.com/blen-labs/fedreg-mcp-server), every merge to `main` creates a SemVer release: breaking changes bump major, `feat` bumps minor, other conventional commits bump patch. The initial release uses the version in `package.json`.
 
-Provision a separate public development client using the service's operator environment:
+CI runs before version stamping, an annotated `vX.Y.Z` tag, GitHub release notes, and a versioned container image. Release recovery and optional Railway deployment are documented in [releasing](./docs/releases.md). No npm publishing is configured: this project ships a hosted service container and source releases.
 
-```sh
-npm run manage -- create-inspector-client TENANT_UUID /private/inspector-config.json
-```
+## Security and contributing
 
-Copy that output privately to `.local/inspector/config.json` on the developer machine, then run:
+See [SECURITY.md](./SECURITY.md) for the threat model and private vulnerability reporting. API keys and OAuth token payloads are encrypted, but the service operator still controls the database and encryption keys; this is not protection against a compromised host administrator.
 
-```sh
-npm ci
-npm run inspector
-```
+Contributions are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md). Do not include real credentials, `.local/` contents, production database dumps, or OAuth callback URLs with authorization codes in issues or pull requests.
 
-Open `http://127.0.0.1:6274` in the app browser and connect `samgov-production`. Sign in with an invited Google account and authorize the named Development Inspector client. A tenant administrator can add the organization's SAM.gov key on the consent screen. Do not enter a key in tool arguments or Inspector headers.
+## License
 
-The separate client uses PKCE S256 with loopback redirects on ports 6274 (UI) and 6276 (CLI). It does not modify the Gemini client. The UI binds to 127.0.0.1 with API authentication enabled. OAuth tokens are encrypted in the ignored `.local/inspector` directory; its local encryption key must remain private. Stop the Inspector with Ctrl+C. Do not deploy it publicly.
+[Apache-2.0](./LICENSE) © 2026 BLEN, Inc. See [NOTICE](./NOTICE).
 
-After authorizing in the UI, run `npm run test:deployed` for a repeatable acceptance gate: modern and legacy discovery, no notification subscriptions, authorization denial, invalid input, live search, distinct pagination, and notice-ID lookup. It writes `.local/inspector-acceptance.json` and exits nonzero if any required gate fails. Use its stored OAuth state for individual CLI checks:
-
-```sh
-npm run inspector:cli -- --method tools/list --format json
-npm run inspector:cli -- --method tools/call --tool-name get_sam_opportunities --tool-args-json '{"posted_from":"10/01/2026","posted_to":"10/08/2026","limit":2}' --format json
-npm run inspector:cli -- --protocol-era legacy --method tools/list --format json
-```
-
-Choose current posted dates. A healthy deployment, successful OAuth, and tool discovery are separate from a successful live SAM.gov search. Confirm returned opportunities, a distinct next page, and a notice-ID lookup before marking live search accepted. Inspector acceptance does not establish Gemini Enterprise acceptance.
-
-On October 8, 2026, Inspector browser testing found and fixed client-name consent labeling, the CSP callback redirect restriction, and the incorrectly advertised tool-list notification capability. The 19-test container suite passed with no skips. Real Inspector OAuth and both protocol modes reached production; a real search returned `UPSTREAM_ERROR` with SAM.gov HTTP 404. Direct local and Railway requests reproduced the empty upstream 404. Live search, pagination, and notice lookup therefore remain unaccepted pending upstream/key investigation.
+Built by [BLEN, Inc.](https://www.blencorp.com). Thanks to GSA for SAM.gov, the MCP team, Better Auth, and the maintainers of oidc-provider.
