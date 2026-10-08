@@ -5,6 +5,10 @@ A version tag records software changes; it does not certify live SAM.gov or Gemi
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-08
+
+- build(deps): bump node from 24-alpine to 26-alpine
+
 ## [0.1.1] - 2026-10-08
 
 - docs: record successful hosted release and Railway deployment
