@@ -4,3 +4,13 @@ Versions follow SemVer. Every non-release merge to main produces a release.
 A version tag records software changes; it does not certify live SAM.gov or Gemini acceptance.
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-10-08
+
+- ci: deploy each verified release tag to Railway production
+- docs: expose optional SAM key for direct local API testing
+- docs: document Apache-2.0 hosting and verification boundaries
+- ci: add verified SemVer releases and tag-based Railway deployment
+- fix: provision tenant OAuth clients within database transactions
+- fix: harden request handling and upstream credential redaction
+- feat: extract hosted multi-tenant SAM.gov MCP service
