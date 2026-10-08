@@ -208,6 +208,14 @@ Contributions are welcome. Read [CONTRIBUTING.md](./CONTRIBUTING.md) and the [Co
 
 [Apache-2.0](./LICENSE) © 2026 BLEN, Inc. See [NOTICE](./NOTICE).
 
+## Hosted service policies
+
+The BLEN-hosted connector's [Privacy Policy](./legal/privacy-policy.md) and
+[Terms of Service](./legal/terms.md) describe sign-in, organization API keys,
+data handling, and conditions of use. These public links can be used in
+Gemini Enterprise connector onboarding. The software remains licensed under
+Apache-2.0; self-hosted operators are responsible for their own policies.
+
 ## Acknowledgements
 
 Thanks to GSA for SAM.gov, the Model Context Protocol team, Better Auth, and the maintainers of oidc-provider. The release workflow follows [BLEN's Federal Register MCP Server](https://github.com/blen-labs/fedreg-mcp-server).
