@@ -14,6 +14,20 @@ To use an existing disposable test database, set `TEST_DATABASE_URL` privately a
 
 `npm run format` applies the shared format. `npm run lint` and `npm run typecheck` are independent checks. Verification records under `.local/` include before/after fingerprints and fail if inputs change while the suite runs.
 
+## Test a SAM.gov key directly
+
+Set the optional `SAM_GOV_API_KEY` in your ignored local `.env` to the current personal API key from SAM.gov Account Details, then run:
+
+```sh
+node --env-file=.env --import tsx scripts/live-sam.ts
+```
+
+If the key is already set securely in the shell environment, use `npm run test:live-sam` instead. The npm command does not load `.env` automatically. Neither command requires the local server or database to be running.
+
+This calls SAM.gov directly and requires nonempty search results, distinct pagination, and a matching notice-ID lookup. It saves a sanitized result in `.local/live-sam.json`. A pass verifies upstream access with that key; use the deployed acceptance test below to verify the full MCP connection.
+
+The hosted server does **not** use `SAM_GOV_API_KEY` as a shared credential. Each organization's administrator enters its key during consent, and the service encrypts it in PostgreSQL. Setting the local test variable does not update BLEN's stored key.
+
 ## MCP Inspector
 
 The official Inspector is pinned as a dev dependency and omitted from the runtime image. It binds to `127.0.0.1:6274` with API authentication enabled. It is not a public route on the hosted server.
