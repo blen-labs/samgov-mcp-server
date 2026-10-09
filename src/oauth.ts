@@ -483,7 +483,8 @@ export function createBroker(options: BrokerOptions) {
               return;
             }
           }
-          if (!(await options.tenants.keyFor(principal))) {
+          // A key saved just above needs no second lookup.
+          if (!key && !(await options.tenants.keyFor(principal))) {
             html(
               res,
               'SAM.gov key required',

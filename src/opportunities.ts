@@ -217,10 +217,16 @@ function wait(ms: number, signal?: AbortSignal) {
 
 const backoff = (attempt: number) => 500 * 2 ** attempt + Math.floor(Math.random() * 250);
 
+// Retry-After as whole seconds; accepts both delay-seconds and HTTP-date forms.
 function retryAfter(response: Response) {
-  const raw = response.headers.get('retry-after');
-  return raw && /^\d{1,8}$/.test(raw) ? raw : undefined;
+  const raw = response.headers.get('retry-after')?.trim();
+  if (!raw) return undefined;
+  if (/^\d{1,8}$/.test(raw)) return raw;
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? undefined : String(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
 }
+
+const cancelled = () => new SamError('UPSTREAM_UNAVAILABLE', 'The search was cancelled.');
 
 // Sends one search, retrying transient failures. The URL contains the key: never surface it.
 async function samGet(
@@ -247,11 +253,10 @@ async function samGet(
         await sleep(backoff(attempt), stop).catch(() => {});
         if (!stop.aborted) continue;
       }
+      if (signal?.aborted) throw cancelled();
       throw new SamError(
         'UPSTREAM_UNAVAILABLE',
-        signal?.aborted
-          ? 'The search was cancelled.'
-          : 'SAM.gov could not be reached after several attempts. Retry in a few minutes.',
+        'SAM.gov could not be reached after several attempts. Retry in a few minutes.',
       );
     }
     if (response.ok) return response;
@@ -266,8 +271,7 @@ async function samGet(
       } catch {
         // Cancelled by the caller while waiting: report that, as the fetch path does. If the
         // total time budget ran out instead, fall through to report the last upstream response.
-        if (signal?.aborted)
-          throw new SamError('UPSTREAM_UNAVAILABLE', 'The search was cancelled.');
+        if (signal?.aborted) throw cancelled();
       }
     }
     throw toSamError(response, attempt + 1);
@@ -299,9 +303,12 @@ function toSamError(response: Response, attempts: number) {
       'UPSTREAM_ERROR',
       'SAM.gov returned HTTP 404 with no data. SAM.gov uses this response for service outages as well as some empty searches, so zero matches are not confirmed. Retry later; if it persists, the SAM.gov API may be unavailable.',
     );
+  // A cooldown too long to wait out here is passed on rather than dropped.
+  const seconds = retryAfter(response);
   return new SamError(
     'UPSTREAM_ERROR',
-    `SAM.gov returned HTTP ${status}${attempts > 1 ? ` after ${attempts} attempts` : ''}. Retry in a few minutes.`,
+    `SAM.gov returned HTTP ${status}${attempts > 1 ? ` after ${attempts} attempts` : ''}.${seconds ? ` Retry after ${seconds} seconds.` : ' Retry in a few minutes.'}`,
+    seconds,
   );
 }
 
@@ -394,8 +401,14 @@ export async function searchOpportunities(
       (args.offset * args.limit < data.totalRecords && data.opportunitiesData.length === 0)
     )
       throw new Error();
-  } catch {
-    if (signal?.aborted) throw new SamError('UPSTREAM_UNAVAILABLE', 'The search was cancelled.');
+  } catch (error) {
+    if (signal?.aborted) throw cancelled();
+    // The per-attempt or total time budget can expire while the body is still streaming.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))
+      throw new SamError(
+        'UPSTREAM_UNAVAILABLE',
+        'SAM.gov took too long to send results. Retry in a few minutes.',
+      );
     throw new SamError(
       'INVALID_RESPONSE',
       'SAM.gov returned an invalid or oversized response; no results can be confirmed.',
@@ -504,11 +517,11 @@ export type KeySave =
  * caller may not change the key.
  */
 export async function saveSamKey(
-  key: string,
+  key: unknown,
   save: (key: string) => Promise<boolean>,
   fetcher?: Fetch,
 ): Promise<KeySave> {
-  if (!KEY_FORMAT.test(key)) return { status: 'invalid_format' };
+  if (typeof key !== 'string' || !KEY_FORMAT.test(key)) return { status: 'invalid_format' };
   const check = await checkSamKey(key, fetcher);
   if (check.status === 'rejected') return check;
   if (!(await save(key))) return { status: 'forbidden' };

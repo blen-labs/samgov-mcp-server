@@ -103,10 +103,11 @@ export function createApp(config: {
           )
             return json({ error: 'invalid_request' }, 400);
           const key = (body as { api_key?: unknown }).api_key;
-          const result =
-            typeof key === 'string'
-              ? await saveSamKey(key, (k) => config.store.setKey(principal, k), config.fetcher)
-              : ({ status: 'invalid_format' } as const);
+          const result = await saveSamKey(
+            key,
+            (k) => config.store.setKey(principal, k),
+            config.fetcher,
+          );
           if (result.status === 'invalid_format')
             return json({ error: 'invalid_credential_format' }, 400);
           if (result.status === 'rejected')

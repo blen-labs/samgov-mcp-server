@@ -367,3 +367,40 @@ test('saveSamKey checks format and SAM.gov before saving', async () => {
     },
   );
 });
+
+test('passes on long upstream cooldowns and reports body timeouts as unavailable', async () => {
+  const delays: number[] = [];
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 503, headers: { 'Retry-After': '120' } }),
+      undefined,
+      { sleep: async (ms) => void delays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'UPSTREAM_ERROR' && error.retryAfter === '120',
+  );
+  assert.deepEqual(delays, []);
+  const dateDelays: number[] = [];
+  const later = new Date(Date.now() + 60_000).toUTCString();
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 429, headers: { 'Retry-After': later } }),
+      undefined,
+      { sleep: async (ms) => void dateDelays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'RATE_LIMITED' && Number(error.retryAfter) > 5,
+  );
+  assert.deepEqual(dateDelays, [], 'an HTTP-date cooldown is honored too');
+  const stalled = new ReadableStream({
+    pull(controller) {
+      controller.error(new DOMException('timed out', 'TimeoutError'));
+    },
+  });
+  await assert.rejects(
+    searchOpportunities(input, 'k', async () => new Response(stalled)),
+    (error: SamError) => error.code === 'UPSTREAM_UNAVAILABLE' && /too long/.test(error.message),
+  );
+});
