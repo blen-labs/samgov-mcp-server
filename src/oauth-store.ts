@@ -194,13 +194,20 @@ export class OAuthStore {
   }
 
   async allow(bucket: string, max: number, seconds: number): Promise<boolean> {
-    const result = await this.pool.query<{ count: number }>(
+    return (await this.consume(bucket, max, seconds)).allowed;
+  }
+
+  /** Counts one use of a fixed window; retryAfter is the whole seconds until it resets. */
+  async consume(bucket: string, max: number, seconds: number) {
+    const result = await this.pool.query<{ count: number; retry_after: number }>(
       `INSERT INTO rate_windows(bucket,count,resets_at) VALUES($1,1,now()+$2*interval '1 second')
       ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN rate_windows.resets_at<=now() THEN 1 ELSE LEAST(rate_windows.count+1,$3::integer+1) END,
-      resets_at=CASE WHEN rate_windows.resets_at<=now() THEN now()+$2*interval '1 second' ELSE rate_windows.resets_at END RETURNING count`,
+      resets_at=CASE WHEN rate_windows.resets_at<=now() THEN now()+$2*interval '1 second' ELSE rate_windows.resets_at END
+      RETURNING count, GREATEST(1, CEIL(EXTRACT(EPOCH FROM resets_at-now())))::integer AS retry_after`,
       [digest(bucket), seconds, max],
     );
-    return result.rows[0]!.count <= max;
+    const row = result.rows[0]!;
+    return { allowed: row.count <= max, retryAfter: row.retry_after };
   }
 
   async revokeTenant(tenantId: string, accountId?: string) {

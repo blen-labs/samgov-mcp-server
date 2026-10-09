@@ -13,6 +13,7 @@ Use Node 24 LTS. Set the variables in `.env.example` in your hosting platform; d
 | `OAUTH_COOKIE_KEYS`                                | JSON array of persistent random signing secrets, newest first                            |
 | `ACTIVE_ENCRYPTION_KEY_ID`, `ENCRYPTION_KEYS_JSON` | Active key ID and key ring; each key is exactly 32 bytes, canonical base64               |
 | `PORT`                                             | 3000 by default; set by the host in production                                           |
+| `TENANT_DAILY_SEARCH_LIMIT`                        | Searches per organization per day; defaults to 1000                                      |
 
 ## Organization administration
 
@@ -50,7 +51,7 @@ This is an advanced integration. Its operator must provision matching external-i
 
 ## Resource limits and edge configuration
 
-Tool requests are limited to 60 per tenant per minute. OAuth traffic is limited to 120 requests per socket IP per minute. Behind a reverse proxy, many users can share that IP and quota: the application intentionally does not trust caller-supplied forwarding headers. Configure trusted-edge per-client rate limits and size/time limits, and load-test your deployment before broad rollout. No aggregate global concurrency limit is currently implemented.
+Tool requests are limited to 60 per tenant per minute. Searches are also capped per organization per day (`TENANT_DAILY_SEARCH_LIMIT`, default 1000); reaching the cap logs one `tenant_daily_limit_reached` warning with the tenant ID and never the search arguments. An identical search repeated more than 5 times in 10 minutes is refused as `REPEATED_CALL`, so a looping assistant cannot drain the quota. That repeat counter lives in process memory, so each replica counts separately and search arguments are never stored. OAuth traffic is limited to 120 requests per socket IP per minute. Behind a reverse proxy, many users can share that IP and quota: the application intentionally does not trust caller-supplied forwarding headers. Configure trusted-edge per-client rate limits and size/time limits, and load-test your deployment before broad rollout. No aggregate global concurrency limit is currently implemented.
 
 Only the configured public host and local/health-check hosts are accepted. Cross-origin browser requests to `/mcp` are rejected. Inspector's local backend and remote non-browser MCP clients can connect without browser CORS. The app must remain behind HTTPS; native loopback callback URIs are reserved for operator-registered development clients.
 
@@ -66,6 +67,10 @@ Only the configured public host and local/health-check hosts are accepted. Cross
 | `UPSTREAM_ERROR`       | Upstream non-success status; a 404 is not proof of a bad key or an empty search |
 | `UPSTREAM_UNAVAILABLE` | Network failure, redirect rejection, timeout, or cancellation                   |
 | `INVALID_RESPONSE`     | Invalid, oversized, or contradictory upstream response; no results confirmed    |
+| `DAILY_LIMIT`          | Organization daily search cap reached; wait `retry_after` or raise the limit    |
+| `REPEATED_CALL`        | Same search repeated too often; change the arguments or stop retrying           |
+
+A daily **SAM.gov API drift** workflow runs one search and checks the response shape and core fields. It fails on a format change or a rejected key and only warns during SAM.gov outages. It needs the repository secret `SAM_GOV_MONITOR_API_KEY`; without it, the run is skipped with a warning.
 
 Check `/healthz` for process health, protected-resource metadata for discovery, Inspector OAuth for authentication, and `npm run test:deployed` for real data. These are separate gates. The October 8, 2026 empty SAM.gov HTTP 404 reproduced on both a local machine and Railway; current account-key verification is still pending. Do not work around that failure by treating it as successful empty data.
 

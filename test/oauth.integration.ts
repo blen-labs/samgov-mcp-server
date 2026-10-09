@@ -351,6 +351,9 @@ for (const publicClient of [false, true])
         const bucket = `test:${randomUUID()}`;
         assert.equal(await store.allow(bucket, 1, 60), true);
         assert.equal(await secondStore.allow(bucket, 1, 60), false);
+        const day = await store.consume(`test:${randomUUID()}`, 1, 86_400);
+        assert.equal(day.allowed, true);
+        assert.ok(day.retryAfter > 86_000 && day.retryAfter <= 86_400, String(day.retryAfter));
         await pool.query('UPDATE tenant_memberships SET enabled=false WHERE tenant_id=$1', [
           tenantId,
         ]);
