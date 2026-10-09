@@ -5,6 +5,10 @@ A version tag records software changes; it does not certify live SAM.gov or Gemi
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-09
+
+- feat: harden SAM.gov client and add key status tool
+
 ## [0.1.5] - 2026-10-08
 
 - docs: publish hosted privacy policy and terms
