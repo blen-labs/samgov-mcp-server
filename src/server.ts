@@ -9,6 +9,8 @@ import { OAuthStore } from './oauth-store.js';
 import { createBroker } from './oauth.js';
 import { createLogin } from './better-login.js';
 import { requestListener } from './http.js';
+import { createUsageLimits } from './usage.js';
+import { SEARCH_TOOL } from './mcp.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -42,6 +44,14 @@ async function main() {
   const store = new TenantStore(pool, vault);
   await store.migrate();
   const oauth = new OAuthStore(pool, vault);
+  // Placeholder default until commercial consumption terms are set; operators override it.
+  const dailyLimit = Number(process.env.TENANT_DAILY_SEARCH_LIMIT || 1000);
+  if (!Number.isInteger(dailyLimit) || dailyLimit < 1)
+    throw new Error('TENANT_DAILY_SEARCH_LIMIT must be a positive integer.');
+  const limits = createUsageLimits({
+    consume: (bucket, max, seconds) => oauth.consume(bucket, max, seconds),
+    dailyLimit,
+  });
   await oauth.migrate();
   await oauth.cleanup();
   const cleanupTimer = setInterval(() => {
@@ -87,6 +97,15 @@ async function main() {
       allow: async (principal) => {
         const membership = await store.resolve(principal);
         return !!membership && (await oauth.allow(`tenant:${membership.tenantId}`, 60, 60));
+      },
+      limitToolCall: async (principal, call) => {
+        // Only searches reach SAM.gov; the key status tool is local.
+        if (call.name !== SEARCH_TOOL) return undefined;
+        const membership = await store.resolve(principal);
+        // Repeats are counted per signed-in user; the daily cap is per organization.
+        return membership
+          ? limits(membership.tenantId, call, JSON.stringify([principal.issuer, principal.subject]))
+          : undefined;
       },
     }),
   );

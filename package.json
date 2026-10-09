@@ -26,7 +26,8 @@
     "test:unit": "tsx --test test/*.test.ts && node --test test/*.test.mjs",
     "test:all": "tsx --test test/*.test.ts test/*.integration.ts && node --test test/*.test.mjs",
     "release:prepare": "node scripts/release.mjs",
-    "check:public": "node scripts/check-public-files.mjs"
+    "check:public": "node scripts/check-public-files.mjs",
+    "test:drift": "tsx scripts/drift-sam.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/node": "2.1.1",

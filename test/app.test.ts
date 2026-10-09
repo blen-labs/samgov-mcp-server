@@ -125,3 +125,39 @@ test('health identifies the deployed runtime version without exposing configurat
   assert.match(body.version, /^\d+\.\d+\.\d+$/);
   assert.deepEqual(Object.keys(body).sort(), ['status', 'version']);
 });
+
+test('tool-call safeguards refuse before SAM.gov with a readable tool error', async () => {
+  const seen: unknown[] = [];
+  let fetched = 0;
+  const app = createApp({
+    publicUrl: 'https://mcp.example',
+    issuer: 'https://issuer.example',
+    verify: async (token) => ({
+      issuer: 'https://issuer.example',
+      subject: token,
+      clientId: 'gemini',
+      scopes: [READ_SCOPE],
+    }),
+    store: {
+      resolve: async () => ({ tenantId: 'org-a', role: 'member' }),
+      keyRecord: async () => ({ key: 'key-alice', savedAt: new Date() }),
+      setKey: async () => true,
+    },
+    fetcher: async () => (fetched++, Response.json({ totalRecords: 0, opportunitiesData: [] })),
+    limitToolCall: async (_principal, call) => {
+      seen.push(call);
+      return { code: 'DAILY_LIMIT', message: 'Limit reached.', retry_after: '3600' };
+    },
+  });
+  const response = await app.fetch(rpc('alice'));
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.result.isError, true);
+  assert.deepEqual(JSON.parse(body.result.content[0].text), {
+    code: 'DAILY_LIMIT',
+    message: 'Limit reached.',
+    retry_after: '3600',
+  });
+  assert.equal(fetched, 0, 'refused calls never reach SAM.gov');
+  assert.equal((seen[0] as { name: string }).name, 'get_sam_opportunities');
+});

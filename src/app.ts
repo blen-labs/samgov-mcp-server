@@ -3,6 +3,7 @@ import { ADMIN_SCOPE, READ_SCOPE, type VerifyToken, type VerifiedPrincipal } fro
 import { createSamMcp } from './mcp.js';
 import { checkSamKey, type Fetch } from './opportunities.js';
 import type { TenantStore } from './tenant-store.js';
+import type { Refusal } from './usage.js';
 
 type Store = Pick<TenantStore, 'resolve' | 'keyRecord' | 'setKey'>;
 
@@ -13,6 +14,11 @@ export function createApp(config: {
   store: Store;
   fetcher?: Fetch;
   allow?: (principal: VerifiedPrincipal) => Promise<boolean>;
+  /** Budget safeguards checked before each tool call; a refusal is returned to the assistant. */
+  limitToolCall?: (
+    principal: VerifiedPrincipal,
+    call: { name: string; arguments: unknown },
+  ) => Promise<Refusal | undefined>;
 }) {
   const origin = new URL(config.publicUrl).origin;
   const resource = `${origin}/mcp`;
@@ -162,6 +168,22 @@ export function createApp(config: {
             },
             400,
           );
+        }
+        if (parsed.method === 'tools/call' && config.limitToolCall) {
+          const params = (
+            parsed.params && typeof parsed.params === 'object' ? parsed.params : {}
+          ) as { name?: unknown; arguments?: unknown };
+          const refusal = await config.limitToolCall(principal, {
+            name: String(params.name),
+            arguments: params.arguments ?? {},
+          });
+          // A tool error, not HTTP 429, so the assistant reads why and stops looping.
+          if (refusal)
+            return json({
+              jsonrpc: '2.0',
+              id: parsed.id ?? null,
+              result: { content: [{ type: 'text', text: JSON.stringify(refusal) }], isError: true },
+            });
         }
         const mcp = createSamMcp(credential.key, config.fetcher, { savedAt: credential.savedAt });
         try {

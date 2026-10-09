@@ -1,0 +1,27 @@
+name: SAM.gov API drift
+on:
+  schedule:
+    - cron: '17 11 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sam-drift
+  cancel-in-progress: true
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Check SAM.gov response shape
+        env:
+          SAM_GOV_API_KEY: ${{ secrets.SAM_GOV_MONITOR_API_KEY }}
+        run: npm run test:drift
