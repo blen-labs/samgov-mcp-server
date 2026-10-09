@@ -1,7 +1,7 @@
 import { VERSION } from './version.js';
 import { ADMIN_SCOPE, READ_SCOPE, type VerifyToken, type VerifiedPrincipal } from './auth.js';
 import { createSamMcp } from './mcp.js';
-import { checkSamKey, type Fetch } from './opportunities.js';
+import { saveSamKey, type Fetch } from './opportunities.js';
 import type { TenantStore } from './tenant-store.js';
 
 type Store = Pick<TenantStore, 'resolve' | 'keyRecord' | 'setKey'>;
@@ -103,18 +103,19 @@ export function createApp(config: {
           )
             return json({ error: 'invalid_request' }, 400);
           const key = (body as { api_key?: unknown }).api_key;
-          if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{8,4096}$/.test(key))
+          const result =
+            typeof key === 'string'
+              ? await saveSamKey(key, (k) => config.store.setKey(principal, k), config.fetcher)
+              : ({ status: 'invalid_format' } as const);
+          if (result.status === 'invalid_format')
             return json({ error: 'invalid_credential_format' }, 400);
-          // One small search rejects keys SAM.gov refuses; outages do not block saving.
-          const check = await checkSamKey(key, config.fetcher);
-          if (check.status === 'rejected')
-            return json({ error: 'credential_rejected', message: check.message }, 422);
-          if (!(await config.store.setKey(principal, key)))
-            return json({ error: 'forbidden' }, 403);
+          if (result.status === 'rejected')
+            return json({ error: 'credential_rejected', message: result.message }, 422);
+          if (result.status === 'forbidden') return json({ error: 'forbidden' }, 403);
           return json({
             saved: true,
-            upstream_verified: check.status === 'valid',
-            ...(check.warning ? { warning: check.warning } : {}),
+            upstream_verified: result.verified,
+            ...(result.warning ? { warning: result.warning } : {}),
           });
         }
         const credential = await config.store.keyRecord(principal);

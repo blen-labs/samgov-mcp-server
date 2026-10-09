@@ -264,7 +264,10 @@ async function samGet(
         await sleep(delay, stop);
         continue;
       } catch {
-        // Cancelled while waiting: report the last upstream response.
+        // Cancelled by the caller while waiting: report that, as the fetch path does. If the
+        // total time budget ran out instead, fall through to report the last upstream response.
+        if (signal?.aborted)
+          throw new SamError('UPSTREAM_UNAVAILABLE', 'The search was cancelled.');
       }
     }
     throw toSamError(response, attempt + 1);
@@ -485,4 +488,33 @@ export async function checkSamKey(apiKey: string, fetcher: Fetch = fetch): Promi
       warning: 'Saved, but SAM.gov could not be reached to check the key. Try a search later.',
     };
   }
+}
+
+const KEY_FORMAT = /^[A-Za-z0-9_-]{8,4096}$/;
+
+export type KeySave =
+  | { status: 'invalid_format' }
+  | { status: 'rejected'; message: string }
+  | { status: 'forbidden' }
+  | { status: 'saved'; verified: boolean; warning?: string };
+
+/**
+ * The one path for saving an organization key: check its format, check it with SAM.gov,
+ * then save it unless SAM.gov definitely rejected it. `save` returns false when the
+ * caller may not change the key.
+ */
+export async function saveSamKey(
+  key: string,
+  save: (key: string) => Promise<boolean>,
+  fetcher?: Fetch,
+): Promise<KeySave> {
+  if (!KEY_FORMAT.test(key)) return { status: 'invalid_format' };
+  const check = await checkSamKey(key, fetcher);
+  if (check.status === 'rejected') return check;
+  if (!(await save(key))) return { status: 'forbidden' };
+  return {
+    status: 'saved',
+    verified: check.status === 'valid',
+    ...(check.warning ? { warning: check.warning } : {}),
+  };
 }

@@ -4,6 +4,7 @@ import {
   checkSamKey,
   opportunityInput,
   SamError,
+  saveSamKey,
   searchOpportunities,
   type Fetch,
 } from '../src/opportunities.js';
@@ -310,4 +311,59 @@ test('key check rejects only definite refusals', async () => {
       (await checkSamKey('k', async () => new Response(null, { status }))).status,
       'unverified',
     );
+});
+
+test('reports a cancellation during a retry wait as cancelled', async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 503 }),
+      controller.signal,
+      {
+        sleep: async () => {
+          controller.abort();
+          throw new Error('aborted');
+        },
+      },
+    ),
+    (error: SamError) => error.code === 'UPSTREAM_UNAVAILABLE' && /cancelled/.test(error.message),
+  );
+});
+
+test('saveSamKey checks format and SAM.gov before saving', async () => {
+  const saved: string[] = [];
+  const save = async (key: string) => (saved.push(key), true);
+  assert.deepEqual(await saveSamKey('bad key!', save, async () => empty()), {
+    status: 'invalid_format',
+  });
+  const rejected = await saveSamKey(
+    'rejected-key',
+    save,
+    async () => new Response(null, { status: 403 }),
+  );
+  assert.equal(rejected.status, 'rejected');
+  assert.deepEqual(saved, [], 'invalid and rejected keys are never saved');
+  assert.deepEqual(await saveSamKey('valid-key', save, async () => empty()), {
+    status: 'saved',
+    verified: true,
+  });
+  const outage = await saveSamKey(
+    'outage-key',
+    save,
+    async () => new Response(null, { status: 503 }),
+  );
+  assert.equal(outage.status === 'saved' && outage.verified, false);
+  assert.deepEqual(saved, ['valid-key', 'outage-key']);
+  assert.deepEqual(
+    await saveSamKey(
+      'valid-key',
+      async () => false,
+      async () => empty(),
+    ),
+    {
+      status: 'forbidden',
+    },
+  );
 });
