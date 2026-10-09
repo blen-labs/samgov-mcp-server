@@ -3,19 +3,18 @@ import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
   opportunityInput,
+  KEY_RENEWAL_DAYS,
   opportunityOutput,
   SamError,
   searchOpportunities,
   type Fetch,
 } from './opportunities.js';
 
-// SAM.gov asks personal-key holders to renew every 90 days; used only as a reminder.
-const KEY_RENEWAL_DAYS = 90;
-
+// The upstream issue and expiry dates are unknown here, so no renewal deadline is derived
+// from the local save time.
 const keyStatusOutput = z.object({
   connected: z.boolean(),
   saved_at: z.string().optional(),
-  renew_by: z.string().optional(),
   note: z.string(),
 });
 
@@ -64,7 +63,7 @@ export function createSamMcp(apiKey: string, fetcher?: Fetch, credential: { save
         {
           title: 'SAM.gov key status',
           description:
-            "Report whether your organization's SAM.gov API key is connected, when it was saved, and when SAM.gov typically expects renewal. Never returns the key. Makes no SAM.gov request, so it works when SAM.gov is unavailable.",
+            "Report whether your organization's SAM.gov API key is connected and when it was last saved. Does not know the key's SAM.gov expiration date. Never returns the key. Makes no SAM.gov request, so it works when SAM.gov is unavailable.",
           outputSchema: keyStatusOutput,
           annotations: {
             readOnlyHint: true,
@@ -75,12 +74,10 @@ export function createSamMcp(apiKey: string, fetcher?: Fetch, credential: { save
         },
         async () => {
           const savedAt = credential.savedAt;
-          const renewBy = savedAt && new Date(savedAt.getTime() + KEY_RENEWAL_DAYS * 86_400_000);
           const result = {
             connected: true,
             ...(savedAt ? { saved_at: savedAt.toISOString() } : {}),
-            ...(renewBy ? { renew_by: renewBy.toISOString().slice(0, 10) } : {}),
-            note: `Searches use this organization key. SAM.gov keys expire periodically (personal keys every ${KEY_RENEWAL_DAYS} days); an organization administrator can replace it while reconnecting. If searches report KEY_REJECTED, the key needs replacing.`,
+            note: `Searches use this organization key. saved_at is when it was last saved here, not when SAM.gov issued it; its actual expiration date is unknown. SAM.gov keys expire periodically (personal keys every ${KEY_RENEWAL_DAYS} days); an organization administrator can replace it while reconnecting. If searches report KEY_REJECTED, the key needs replacing.`,
           };
           return {
             content: [{ type: 'text', text: JSON.stringify(result) }],
