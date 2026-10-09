@@ -98,7 +98,7 @@ Two read-only tools: **`get_sam_opportunities`** searches SAM.gov; **`get_sam_ke
 
 Results include `total`, `opportunities`, `date_range` (ISO dates), `retrieved_at`, and `next_offset`, described by the tool's output schema. Opportunities include selected public fields, place of performance, award details when present, and safe notice links; empty upstream fields are omitted. Descriptions, attachments, entities, exclusions, and historical notice versions are outside this server's scope. Notice text is untrusted data, never instructions.
 
-Upstream errors are explicit MCP tool errors (`isError: true`) with guidance the assistant can act on, not empty success results. Transient SAM.gov failures (429 and 5xx) are retried twice with backoff. When an administrator saves a key, one small SAM.gov search checks it: a definite rejection (HTTP 401/403) blocks saving, while an outage saves the key unverified. See [troubleshooting](./docs/operations.md#troubleshooting).
+Upstream errors are explicit MCP tool errors (`isError: true`) with guidance the assistant can act on, not empty success results. Transient SAM.gov failures (429, 500, 502, 503, 504, and network errors) are retried up to twice with backoff within a 40-second total budget; a `Retry-After` longer than 5 seconds is returned to the assistant instead of retried. When an administrator saves a key, one small SAM.gov search checks it: a definite rejection (HTTP 401/403) blocks saving, while an outage saves the key unverified. See [troubleshooting](./docs/operations.md#troubleshooting).
 
 ## Self-hosting
 

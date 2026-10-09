@@ -3,6 +3,8 @@ import test from 'node:test';
 import {
   checkSamKey,
   opportunityInput,
+  SamError,
+  saveSamKey,
   searchOpportunities,
   type Fetch,
 } from '../src/opportunities.js';
@@ -244,12 +246,29 @@ test('retries transient upstream failures but not 404, with actionable errors', 
     'k',
     async () =>
       ++attempts === 1
-        ? new Response(null, { status: 429, headers: { 'Retry-After': '60' } })
+        ? new Response(null, { status: 429, headers: { 'Retry-After': '3' } })
         : empty(),
     undefined,
     { sleep: async (ms) => void delays.push(ms) },
   );
-  assert.deepEqual(delays, [5000]);
+  assert.deepEqual(delays, [3000]);
+  delays.length = 0;
+  attempts = 0;
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => {
+        attempts++;
+        return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
+      },
+      undefined,
+      { sleep: async (ms) => void delays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'RATE_LIMITED' && error.retryAfter === '60',
+  );
+  assert.equal(attempts, 1, 'must not retry before a long Retry-After cooldown ends');
+  assert.deepEqual(delays, []);
 });
 
 test('returns place of performance and award details without null fields', async () => {
@@ -292,4 +311,96 @@ test('key check rejects only definite refusals', async () => {
       (await checkSamKey('k', async () => new Response(null, { status }))).status,
       'unverified',
     );
+});
+
+test('reports a cancellation during a retry wait as cancelled', async () => {
+  const controller = new AbortController();
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 503 }),
+      controller.signal,
+      {
+        sleep: async () => {
+          controller.abort();
+          throw new Error('aborted');
+        },
+      },
+    ),
+    (error: SamError) => error.code === 'UPSTREAM_UNAVAILABLE' && /cancelled/.test(error.message),
+  );
+});
+
+test('saveSamKey checks format and SAM.gov before saving', async () => {
+  const saved: string[] = [];
+  const save = async (key: string) => (saved.push(key), true);
+  assert.deepEqual(await saveSamKey('bad key!', save, async () => empty()), {
+    status: 'invalid_format',
+  });
+  const rejected = await saveSamKey(
+    'rejected-key',
+    save,
+    async () => new Response(null, { status: 403 }),
+  );
+  assert.equal(rejected.status, 'rejected');
+  assert.deepEqual(saved, [], 'invalid and rejected keys are never saved');
+  assert.deepEqual(await saveSamKey('valid-key', save, async () => empty()), {
+    status: 'saved',
+    verified: true,
+  });
+  const outage = await saveSamKey(
+    'outage-key',
+    save,
+    async () => new Response(null, { status: 503 }),
+  );
+  assert.equal(outage.status === 'saved' && outage.verified, false);
+  assert.deepEqual(saved, ['valid-key', 'outage-key']);
+  assert.deepEqual(
+    await saveSamKey(
+      'valid-key',
+      async () => false,
+      async () => empty(),
+    ),
+    {
+      status: 'forbidden',
+    },
+  );
+});
+
+test('passes on long upstream cooldowns and reports body timeouts as unavailable', async () => {
+  const delays: number[] = [];
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 503, headers: { 'Retry-After': '120' } }),
+      undefined,
+      { sleep: async (ms) => void delays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'UPSTREAM_ERROR' && error.retryAfter === '120',
+  );
+  assert.deepEqual(delays, []);
+  const dateDelays: number[] = [];
+  const later = new Date(Date.now() + 60_000).toUTCString();
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => new Response(null, { status: 429, headers: { 'Retry-After': later } }),
+      undefined,
+      { sleep: async (ms) => void dateDelays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'RATE_LIMITED' && Number(error.retryAfter) > 5,
+  );
+  assert.deepEqual(dateDelays, [], 'an HTTP-date cooldown is honored too');
+  const stalled = new ReadableStream({
+    pull(controller) {
+      controller.error(new DOMException('timed out', 'TimeoutError'));
+    },
+  });
+  await assert.rejects(
+    searchOpportunities(input, 'k', async () => new Response(stalled)),
+    (error: SamError) => error.code === 'UPSTREAM_UNAVAILABLE' && /too long/.test(error.message),
+  );
 });

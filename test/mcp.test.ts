@@ -69,6 +69,7 @@ test('modern client discovers and calls tools without initialization or a sessio
       await mcp.fetch(request('tools/call', { name: 'get_sam_key_status', arguments: {} }))
     ).json();
     assert.equal(status.result.structuredContent.connected, true, JSON.stringify(status));
+    assert.equal(status.result.structuredContent.renew_by, undefined, 'no unverified deadline');
     assert.ok(!JSON.stringify(status).includes('test-key'));
   } finally {
     await mcp.close();

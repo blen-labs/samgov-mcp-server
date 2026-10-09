@@ -66,7 +66,10 @@ for (const publicClient of [false, true])
         cookieKeys,
         allowLocalHttp: true,
         login,
-        fetcher: async () => Response.json({ totalRecords: 0, opportunitiesData: [] }),
+        fetcher: async (url: URL | RequestInfo) =>
+          new URL(String(url)).searchParams.get('api_key') === 'rejected-test-secret'
+            ? new Response(null, { status: 403 })
+            : Response.json({ totalRecords: 0, opportunitiesData: [] }),
       };
       let broker = createBroker(options);
       function install() {
@@ -248,6 +251,20 @@ for (const publicClient of [false, true])
         });
         assert.equal(csrfRejected.status, 400);
         consent = await (await browser(`${origin}/interaction/${consentId}`)).text();
+        // A key SAM.gov rejects re-shows the form with a fresh token instead of ending the flow.
+        const rejectedKey = await browser(`${origin}/interaction/${consentId}/confirm`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: origin },
+          body: new URLSearchParams({
+            csrf: csrf(consent)!,
+            decision: 'allow',
+            api_key: 'rejected-test-secret',
+          }),
+        });
+        assert.equal(rejectedKey.status, 400);
+        consent = await rejectedKey.text();
+        assert.match(consent, /SAM.gov rejected this key/);
+        assert.ok(!consent.includes('rejected-test-secret'));
         const submitted = await browser(`${origin}/interaction/${consentId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: origin },

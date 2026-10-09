@@ -119,8 +119,9 @@ export const opportunityInput = z
       if (end < start || end > maximum)
         ctx.addIssue({
           code: 'custom',
-          path: ['posted_to'],
-          message: 'Posted date range must be ordered and no longer than one year',
+          // Point at the date the caller supplied when the other one was defaulted.
+          path: [value.posted_to || !value.posted_from ? 'posted_to' : 'posted_from'],
+          message: `Posted date range ${isoDay(start)} to ${isoDay(end)} must be ordered and no longer than one year${value.posted_to ? '' : ' (posted_to defaults to today)'}`,
         });
     }
     const deadlineFrom = value.response_deadline_from && parseDate(value.response_deadline_from);
@@ -192,28 +193,40 @@ export type SamOptions = {
 };
 
 const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+const MAX_RETRY_WAIT_MS = 5000;
+const ATTEMPT_TIMEOUT_MS = 20000;
+// Bounds all attempts together so retries cannot outlast typical MCP client tool timeouts.
+const TOTAL_TIMEOUT_MS = 40000;
+// SAM.gov asks personal-key holders to renew every 90 days.
+export const KEY_RENEWAL_DAYS = 90;
 
 function wait(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason);
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
 const backoff = (attempt: number) => 500 * 2 ** attempt + Math.floor(Math.random() * 250);
 
+// Retry-After as whole seconds; accepts both delay-seconds and HTTP-date forms.
 function retryAfter(response: Response) {
-  const raw = response.headers.get('retry-after');
-  return raw && /^\d{1,8}$/.test(raw) ? raw : undefined;
+  const raw = response.headers.get('retry-after')?.trim();
+  if (!raw) return undefined;
+  if (/^\d{1,8}$/.test(raw)) return raw;
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? undefined : String(Math.max(0, Math.ceil((at - Date.now()) / 1000)));
 }
+
+const cancelled = () => new SamError('UPSTREAM_UNAVAILABLE', 'The search was cancelled.');
 
 // Sends one search, retrying transient failures. The URL contains the key: never surface it.
 async function samGet(
@@ -224,39 +237,41 @@ async function samGet(
 ) {
   const maxRetries = options.maxRetries ?? 2;
   const sleep = options.sleep ?? wait;
+  const deadline = AbortSignal.timeout(TOTAL_TIMEOUT_MS);
+  const stop = signal ? AbortSignal.any([signal, deadline]) : deadline;
   for (let attempt = 0; ; attempt++) {
     let response: Response;
     try {
       response = await fetcher(url, {
         headers: { Accept: 'application/json', 'User-Agent': `SAMgov-MCP/${VERSION}` },
         redirect: 'error',
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(20000)])
-          : AbortSignal.timeout(20000),
+        signal: AbortSignal.any([stop, AbortSignal.timeout(ATTEMPT_TIMEOUT_MS)]),
       });
     } catch {
       // Fetch exceptions can include the URL containing the secret. Never propagate them.
-      if (attempt < maxRetries && !signal?.aborted) {
-        await sleep(backoff(attempt), signal).catch(() => {});
-        if (!signal?.aborted) continue;
+      if (attempt < maxRetries && !stop.aborted) {
+        await sleep(backoff(attempt), stop).catch(() => {});
+        if (!stop.aborted) continue;
       }
+      if (signal?.aborted) throw cancelled();
       throw new SamError(
         'UPSTREAM_UNAVAILABLE',
-        signal?.aborted
-          ? 'The search was cancelled.'
-          : 'SAM.gov could not be reached after several attempts. Retry in a few minutes.',
+        'SAM.gov could not be reached after several attempts. Retry in a few minutes.',
       );
     }
     if (response.ok) return response;
     await response.body?.cancel().catch(() => {});
-    if (RETRYABLE.has(response.status) && attempt < maxRetries) {
-      const seconds = retryAfter(response);
-      const delay = seconds ? Math.min(Number(seconds) * 1000, 5000) : backoff(attempt);
+    const seconds = retryAfter(response);
+    const delay = seconds ? Number(seconds) * 1000 : backoff(attempt);
+    // Never retry before SAM.gov's cooldown ends; a longer cooldown fails fast with Retry-After.
+    if (RETRYABLE.has(response.status) && attempt < maxRetries && delay <= MAX_RETRY_WAIT_MS) {
       try {
-        await sleep(delay, signal);
+        await sleep(delay, stop);
         continue;
       } catch {
-        // Cancelled while waiting: report the last upstream response.
+        // Cancelled by the caller while waiting: report that, as the fetch path does. If the
+        // total time budget ran out instead, fall through to report the last upstream response.
+        if (signal?.aborted) throw cancelled();
       }
     }
     throw toSamError(response, attempt + 1);
@@ -268,7 +283,7 @@ function toSamError(response: Response, attempts: number) {
   if (status === 401 || status === 403)
     return new SamError(
       'KEY_REJECTED',
-      `SAM.gov rejected this organization's API key (HTTP ${status}). SAM.gov keys expire and must be renewed periodically (personal keys every 90 days). Ask an organization administrator to reconnect with a current key, then retry.`,
+      `SAM.gov rejected this organization's API key (HTTP ${status}). SAM.gov keys expire and must be renewed periodically (personal keys every ${KEY_RENEWAL_DAYS} days). Ask an organization administrator to reconnect with a current key, then retry.`,
     );
   if (status === 429) {
     const seconds = retryAfter(response);
@@ -288,9 +303,12 @@ function toSamError(response: Response, attempts: number) {
       'UPSTREAM_ERROR',
       'SAM.gov returned HTTP 404 with no data. SAM.gov uses this response for service outages as well as some empty searches, so zero matches are not confirmed. Retry later; if it persists, the SAM.gov API may be unavailable.',
     );
+  // A cooldown too long to wait out here is passed on rather than dropped.
+  const seconds = retryAfter(response);
   return new SamError(
     'UPSTREAM_ERROR',
-    `SAM.gov returned HTTP ${status}${attempts > 1 ? ` after ${attempts} attempts` : ''}. Retry in a few minutes.`,
+    `SAM.gov returned HTTP ${status}${attempts > 1 ? ` after ${attempts} attempts` : ''}.${seconds ? ` Retry after ${seconds} seconds.` : ' Retry in a few minutes.'}`,
+    seconds,
   );
 }
 
@@ -383,7 +401,14 @@ export async function searchOpportunities(
       (args.offset * args.limit < data.totalRecords && data.opportunitiesData.length === 0)
     )
       throw new Error();
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw cancelled();
+    // The per-attempt or total time budget can expire while the body is still streaming.
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'))
+      throw new SamError(
+        'UPSTREAM_UNAVAILABLE',
+        'SAM.gov took too long to send results. Retry in a few minutes.',
+      );
     throw new SamError(
       'INVALID_RESPONSE',
       'SAM.gov returned an invalid or oversized response; no results can be confirmed.',
@@ -476,4 +501,33 @@ export async function checkSamKey(apiKey: string, fetcher: Fetch = fetch): Promi
       warning: 'Saved, but SAM.gov could not be reached to check the key. Try a search later.',
     };
   }
+}
+
+const KEY_FORMAT = /^[A-Za-z0-9_-]{8,4096}$/;
+
+export type KeySave =
+  | { status: 'invalid_format' }
+  | { status: 'rejected'; message: string }
+  | { status: 'forbidden' }
+  | { status: 'saved'; verified: boolean; warning?: string };
+
+/**
+ * The one path for saving an organization key: check its format, check it with SAM.gov,
+ * then save it unless SAM.gov definitely rejected it. `save` returns false when the
+ * caller may not change the key.
+ */
+export async function saveSamKey(
+  key: unknown,
+  save: (key: string) => Promise<boolean>,
+  fetcher?: Fetch,
+): Promise<KeySave> {
+  if (typeof key !== 'string' || !KEY_FORMAT.test(key)) return { status: 'invalid_format' };
+  const check = await checkSamKey(key, fetcher);
+  if (check.status === 'rejected') return check;
+  if (!(await save(key))) return { status: 'forbidden' };
+  return {
+    status: 'saved',
+    verified: check.status === 'valid',
+    ...(check.warning ? { warning: check.warning } : {}),
+  };
 }

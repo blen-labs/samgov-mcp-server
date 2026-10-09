@@ -5,7 +5,7 @@ import { READ_SCOPE, type VerifyToken } from './auth.js';
 import type { BetterLogin } from './better-login.js';
 import { fromNodeHeaders } from 'better-auth/node';
 import { OAuthStore } from './oauth-store.js';
-import { checkSamKey, type Fetch } from './opportunities.js';
+import { saveSamKey, type Fetch } from './opportunities.js';
 import { TenantStore } from './tenant-store.js';
 
 const random = () => randomBytes(32).toString('base64url');
@@ -431,7 +431,8 @@ export function createBroker(options: BrokerOptions) {
           'SELECT name FROM tenants WHERE id=$1',
           [membership.tenantId],
         );
-        if (req.method === 'GET' && !action) {
+        // Renders the consent form with a fresh single-use CSRF token, optionally after an error.
+        const consentForm = async (error?: string) => {
           const csrf = random();
           await options.store.put('ConsentForm', details.uid, { csrf });
           const hasKey = !!(await options.tenants.keyFor(principal));
@@ -439,11 +440,14 @@ export function createBroker(options: BrokerOptions) {
           html(
             res,
             `Authorize ${clientName}`,
-            `<p>Connect ${esc(clientName)} to <strong>${esc(tenant.rows[0]?.name)}</strong> for read-only SAM.gov opportunity searches.</p><form method="post" action="/interaction/${esc(details.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}">${membership.role === 'admin' ? `<h2>${hasKey ? 'Your organization’s SAM.gov key' : 'Add your organization’s SAM.gov key'}</h2><p>Use a <strong>SAM.gov system-account API key</strong> that your organization is allowed to use for public opportunity searches. Everyone with access to this organization can search using this key.</p><p><strong>Do not enter a personal API key.</strong> Personal keys are for one person. This connection shares one key across your organization.</p><p>Need a key? Ask the person who manages your organization’s SAM.gov system account, or see <a href="https://sam.gov/help">SAM.gov Help</a> under <strong>Using Data Services → APIs</strong>.</p><label for="api_key">${hasKey ? 'Replace the saved key (optional)' : 'SAM.gov system-account API key'}</label><input id="api_key" type="password" name="api_key" autocomplete="off" aria-describedby="key-help key-storage" maxlength="4096"${hasKey ? '' : ' required'}><small id="key-help">${hasKey ? 'Leave this blank to keep the current key. A replacement changes the key for everyone in your organization.' : 'Paste the API key here. We do not need your SAM.gov password.'}</small><p id="key-storage">We store the key encrypted and use it on the server. Your AI assistant never receives the key. When you save it, we run one small SAM.gov search to check that SAM.gov accepts it.</p>` : `<p>${hasKey ? 'Searches use your organization’s saved SAM.gov key. You do not need to enter a personal key.' : 'Ask an organization administrator to add a SAM.gov system-account API key before you connect.'}</p>`}<button name="decision" value="allow"${!hasKey && membership.role !== 'admin' ? ' disabled' : ''}>Authorize connection</button><button name="decision" value="deny">Cancel</button></form><small>Disconnect through your MCP client to stop using this connection. An administrator can revoke all grants using the service management command.</small>`,
-            200,
+            `${error ? `<p role="alert"><strong>${esc(error)}</strong></p>` : ''}<p>Connect ${esc(clientName)} to <strong>${esc(tenant.rows[0]?.name)}</strong> for read-only SAM.gov opportunity searches.</p><form method="post" action="/interaction/${esc(details.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}">${membership.role === 'admin' ? `<h2>${hasKey ? 'Your organization’s SAM.gov key' : 'Add your organization’s SAM.gov key'}</h2><p>Use a <strong>SAM.gov system-account API key</strong> that your organization is allowed to use for public opportunity searches. Everyone with access to this organization can search using this key.</p><p><strong>Do not enter a personal API key.</strong> Personal keys are for one person. This connection shares one key across your organization.</p><p>Need a key? Ask the person who manages your organization’s SAM.gov system account, or see <a href="https://sam.gov/help">SAM.gov Help</a> under <strong>Using Data Services → APIs</strong>.</p><label for="api_key">${hasKey ? 'Replace the saved key (optional)' : 'SAM.gov system-account API key'}</label><input id="api_key" type="password" name="api_key" autocomplete="off" aria-describedby="key-help key-storage" maxlength="4096"${hasKey ? '' : ' required'}><small id="key-help">${hasKey ? 'Leave this blank to keep the current key. A replacement changes the key for everyone in your organization.' : 'Paste the API key here. We do not need your SAM.gov password.'}</small><p id="key-storage">We store the key encrypted and use it on the server. Your AI assistant never receives the key. When you save it, we run one small SAM.gov search to check that SAM.gov accepts it.</p>` : `<p>${hasKey ? 'Searches use your organization’s saved SAM.gov key. You do not need to enter a personal key.' : 'Ask an organization administrator to add a SAM.gov system-account API key before you connect.'}</p>`}<button name="decision" value="allow"${!hasKey && membership.role !== 'admin' ? ' disabled' : ''}>Authorize connection</button><button name="decision" value="deny">Cancel</button></form><small>Disconnect through your MCP client to stop using this connection. An administrator can revoke all grants using the service management command.</small>`,
+            error ? 400 : 200,
             undefined,
             clientOrigin,
           );
+        };
+        if (req.method === 'GET' && !action) {
+          await consentForm();
           return;
         }
         if (action === 'confirm' && req.method === 'POST') {
@@ -461,22 +465,26 @@ export function createBroker(options: BrokerOptions) {
           }
           const key = body.get('api_key');
           if (key) {
-            if (!/^[A-Za-z0-9_-]{8,4096}$/.test(key) || membership.role !== 'admin')
-              throw new Error();
-            // Only a definite rejection blocks saving; SAM.gov outages do not.
-            const check = await checkSamKey(key, options.fetcher);
-            if (check.status === 'rejected') {
-              html(
-                res,
-                'SAM.gov key rejected',
-                `<p>${esc(check.message)}</p><p>Return to your AI assistant and start a new connection to try another key.</p>`,
-                400,
+            if (membership.role !== 'admin') throw new Error();
+            const result = await saveSamKey(
+              key,
+              (k) => options.tenants.setKey(principal, k),
+              options.fetcher,
+            );
+            if (result.status === 'forbidden') throw new Error();
+            if (result.status !== 'saved') {
+              // Show the form again so the admin can try another key, or leave the field
+              // blank to keep a key the organization already has.
+              await consentForm(
+                result.status === 'rejected'
+                  ? result.message
+                  : 'That does not look like a SAM.gov API key. Check for missing characters or spaces.',
               );
               return;
             }
-            if (!(await options.tenants.setKey(principal, key))) throw new Error();
           }
-          if (!(await options.tenants.keyFor(principal))) {
+          // A key saved just above needs no second lookup.
+          if (!key && !(await options.tenants.keyFor(principal))) {
             html(
               res,
               'SAM.gov key required',
