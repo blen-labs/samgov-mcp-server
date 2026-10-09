@@ -68,34 +68,37 @@ Follow Google's [custom MCP connector setup](https://docs.cloud.google.com/gemin
 
 ## Tool reference
 
-One read-only tool: **`get_sam_opportunities`**.
+Two read-only tools: **`get_sam_opportunities`** searches SAM.gov; **`get_sam_key_status`** reports whether the organization key is connected and when it was saved, without calling SAM.gov or returning the key.
 
 ```json
 {
-  "posted_from": "10/01/2026",
-  "posted_to": "10/08/2026",
+  "posted_from": "2026-10-01",
+  "posted_to": "2026-10-08",
   "keyword": "software",
   "naics": "541512",
+  "notice_type": "solicitation",
   "limit": 10,
   "offset": 0
 }
 ```
 
-Use current dates for a live search. `keyword` searches **titles only**, not descriptions or attachments.
+`keyword` searches **titles only**, not descriptions or attachments.
 
-| Inputs                                        | Rules                                                                                          |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `posted_from`, `posted_to`                    | Required `MM/dd/yyyy`; ordered, at most one year apart                                         |
-| `keyword`, `notice_id`, `solicitation_number` | Optional text filters                                                                          |
-| `organization_name`, `organization_code`      | Optional agency/organization filters                                                           |
-| `procurement_type`, `set_aside`               | SAM.gov codes; see [API documentation](https://open.gsa.gov/api/get-opportunities-public-api/) |
-| `state`, `naics`, `classification_code`       | Optional place-of-performance state, NAICS, and classification filters                         |
-| `limit`                                       | 1–100; default 10                                                                              |
-| `offset`                                      | Zero-based **page index**, default 0; use returned `next_offset`                               |
+| Inputs                                               | Rules                                                                                                                                                                                    |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `posted_from`, `posted_to`                           | Optional `YYYY-MM-DD` (`MM/dd/yyyy` also accepted); default the last 30 days ending today (UTC); ordered, at most one year apart                                                         |
+| `keyword`, `notice_id`, `solicitation_number`        | Optional text filters                                                                                                                                                                    |
+| `organization_name`, `organization_code`             | Optional agency/organization filters                                                                                                                                                     |
+| `notice_type`                                        | `solicitation`, `presolicitation`, `combined_synopsis_solicitation`, `sources_sought`, `special_notice`, `award_notice`, `justification`, `sale_of_surplus_property`, `intent_to_bundle` |
+| `procurement_type`                                   | SAM.gov single-letter equivalent of `notice_type`, kept for compatibility                                                                                                                |
+| `set_aside`, `state`, `naics`, `classification_code` | SAM.gov codes; see [API documentation](https://open.gsa.gov/api/get-opportunities-public-api/)                                                                                           |
+| `response_deadline_from`, `response_deadline_to`     | Optional response-deadline range, same date formats                                                                                                                                      |
+| `limit`                                              | 1–100; default 10                                                                                                                                                                        |
+| `offset`                                             | Zero-based **page index**, default 0; use returned `next_offset`                                                                                                                         |
 
-Results include `total`, `opportunities`, `date_range`, `retrieved_at`, and `next_offset`. Only selected public fields and safe notice links are returned. Descriptions, attachments, entities, exclusions, and historical notice versions are outside this server's scope. Notice text is untrusted data, never instructions.
+Results include `total`, `opportunities`, `date_range` (ISO dates), `retrieved_at`, and `next_offset`, described by the tool's output schema. Opportunities include selected public fields, place of performance, award details when present, and safe notice links; empty upstream fields are omitted. Descriptions, attachments, entities, exclusions, and historical notice versions are outside this server's scope. Notice text is untrusted data, never instructions.
 
-Upstream errors are explicit MCP tool errors (`isError: true`), not empty success results. Saving a key does not validate it. See [troubleshooting](./docs/operations.md#troubleshooting).
+Upstream errors are explicit MCP tool errors (`isError: true`) with guidance the assistant can act on, not empty success results. Transient SAM.gov failures (429 and 5xx) are retried twice with backoff. When an administrator saves a key, one small SAM.gov search checks it: a definite rejection (HTTP 401/403) blocks saving, while an outage saves the key unverified. See [troubleshooting](./docs/operations.md#troubleshooting).
 
 ## Self-hosting
 
@@ -182,13 +185,13 @@ This uses the real upstream API. It does not save or replace an organization's h
 
 ## Troubleshooting
 
-| Symptom                                       | What to check                                                                                                                                                           |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Google sign-in fails                          | Both Google credentials must be configured, the Google web client callback must match exactly, and the account must be eligible for your Google OAuth consent audience. |
-| Signed in, but access is denied               | Use the invited Google email address and confirm that the organization and membership are active. An organization administrator must save the SAM.gov key.              |
-| MCP returns HTTP 401                          | Reconnect the assistant to obtain a valid OAuth grant. A SAM.gov key is not an MCP bearer token.                                                                        |
-| Search reports `UPSTREAM_ERROR` with HTTP 404 | SAM.gov returned an error. This does not establish that the key is invalid or that the search has no matches; use the direct API test to isolate upstream access.       |
-| Service returns HTTP 429                      | The service allows 60 tool requests per organization per minute. Respect `Retry-After`; SAM.gov also enforces its own key quotas.                                       |
+| Symptom                                       | What to check                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google sign-in fails                          | Both Google credentials must be configured, the Google web client callback must match exactly, and the account must be eligible for your Google OAuth consent audience.                                                                               |
+| Signed in, but access is denied               | Use the invited Google email address and confirm that the organization and membership are active. An organization administrator must save the SAM.gov key.                                                                                            |
+| MCP returns HTTP 401                          | Reconnect the assistant to obtain a valid OAuth grant. A SAM.gov key is not an MCP bearer token.                                                                                                                                                      |
+| Search reports `UPSTREAM_ERROR` with HTTP 404 | SAM.gov returned an empty 404. It uses this for outages as well as some empty searches; if `curl https://api.sam.gov/does-not-exist` returns the same empty 404, the SAM.gov API gateway is down. Use the direct API test to isolate upstream access. |
+| Service returns HTTP 429                      | The service allows 60 tool requests per organization per minute. Respect `Retry-After`; SAM.gov also enforces its own key quotas.                                                                                                                     |
 
 More error codes, account recovery, member invitations, and access revocation: [operations guide](./docs/operations.md). Keep credentials and token-bearing URLs out of issue reports.
 

@@ -66,6 +66,7 @@ for (const publicClient of [false, true])
         cookieKeys,
         allowLocalHttp: true,
         login,
+        fetcher: async () => Response.json({ totalRecords: 0, opportunitiesData: [] }),
       };
       let broker = createBroker(options);
       function install() {
@@ -323,7 +324,7 @@ for (const publicClient of [false, true])
                 requestInit: { headers: { Authorization: `Bearer ${tokens.access_token}` } },
               }),
             );
-            assert.equal((await sdk.listTools()).tools.length, 1);
+            assert.equal((await sdk.listTools()).tools.length, 2);
             const result = await sdk.callTool({
               name: 'get_sam_opportunities',
               arguments: { posted_from: '10/01/2026', posted_to: '10/07/2026' },

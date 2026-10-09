@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { opportunityInput, searchOpportunities, type Fetch } from '../src/opportunities.js';
+import {
+  checkSamKey,
+  opportunityInput,
+  searchOpportunities,
+  type Fetch,
+} from '../src/opportunities.js';
+
+const instant = { sleep: async () => {} };
 
 const input = opportunityInput.parse({
   posted_from: '10/01/2026',
@@ -57,6 +64,8 @@ test('upstream failures remain errors and cannot expose response bodies or reque
         input,
         'secret-test-key',
         async () => new Response('secret-test-key', { status }),
+        undefined,
+        instant,
       ),
       (error) => {
         assert.ok(error instanceof Error);
@@ -66,9 +75,15 @@ test('upstream failures remain errors and cannot expose response bodies or reque
     );
   }
   await assert.rejects(
-    searchOpportunities(input, 'secret-test-key', async () => {
-      throw new Error('https://api.sam.gov/?api_key=secret-test-key');
-    }),
+    searchOpportunities(
+      input,
+      'secret-test-key',
+      async () => {
+        throw new Error('https://api.sam.gov/?api_key=secret-test-key');
+      },
+      undefined,
+      instant,
+    ),
     /could not be reached/,
   );
   await assert.rejects(
@@ -116,8 +131,10 @@ test('cancels error response bodies and rejects contradictory or oversized resul
           }),
           { status: 429 },
         ),
+      undefined,
+      instant,
     ),
-    /rate limit/,
+    /request limit/,
   );
   assert.equal(cancelled, true);
   for (const data of [
@@ -143,4 +160,136 @@ test('cancels error response bodies and rejects contradictory or oversized resul
       .success,
     true,
   );
+});
+
+const empty = () => Response.json({ totalRecords: 0, opportunitiesData: [] });
+
+test('accepts ISO dates, defaults to the last 30 days, and maps readable notice types', async () => {
+  const seen: URL[] = [];
+  const fetcher: Fetch = async (request) => {
+    seen.push(new URL(String(request)));
+    return empty();
+  };
+  const result = await searchOpportunities(
+    {
+      posted_from: '2026-10-01',
+      posted_to: '2026-10-07',
+      notice_type: 'sources_sought',
+      response_deadline_from: '2026-10-10',
+      response_deadline_to: '2026-11-01',
+    },
+    'k',
+    fetcher,
+  );
+  assert.equal(seen[0]?.searchParams.get('postedFrom'), '10/01/2026');
+  assert.equal(seen[0]?.searchParams.get('postedTo'), '10/07/2026');
+  assert.equal(seen[0]?.searchParams.get('ptype'), 'r');
+  assert.equal(seen[0]?.searchParams.get('rdlfrom'), '10/10/2026');
+  assert.equal(seen[0]?.searchParams.get('rdlto'), '11/01/2026');
+  assert.deepEqual(result.date_range, { from: '2026-10-01', to: '2026-10-07' });
+  await searchOpportunities({}, 'k', fetcher);
+  const from = new Date(result.date_range.from);
+  const defaults = seen[1]!;
+  const [m1, d1, y1] = defaults.searchParams.get('postedFrom')!.split('/');
+  const [m2, d2, y2] = defaults.searchParams.get('postedTo')!.split('/');
+  const span = Date.parse(`${y2}-${m2}-${d2}`) - Date.parse(`${y1}-${m1}-${d1}`);
+  assert.equal(span, 30 * 86_400_000);
+  assert.ok(from);
+  for (const bad of [
+    { notice_type: 'solicitation', procurement_type: 'r' },
+    { response_deadline_from: '2026-11-01', response_deadline_to: '2026-10-01' },
+    { posted_from: '2026-13-01' },
+  ])
+    assert.equal(opportunityInput.safeParse(bad).success, false, JSON.stringify(bad));
+  assert.equal(
+    opportunityInput.safeParse({ posted_from: '10/01/2026', posted_to: '2026-10-07' }).success,
+    true,
+  );
+});
+
+test('retries transient upstream failures but not 404, with actionable errors', async () => {
+  let attempts = 0;
+  const flaky: Fetch = async () => (++attempts < 3 ? new Response(null, { status: 503 }) : empty());
+  await searchOpportunities(input, 'k', flaky, undefined, instant);
+  assert.equal(attempts, 3);
+  attempts = 0;
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => {
+        attempts++;
+        return new Response(null, { status: 404 });
+      },
+      undefined,
+      instant,
+    ),
+    /zero matches are not confirmed/,
+  );
+  assert.equal(attempts, 1);
+  await assert.rejects(
+    searchOpportunities(input, 'k', async () => new Response(null, { status: 502 }), undefined, {
+      ...instant,
+    }),
+    /HTTP 502 after 3 attempts/,
+  );
+  await assert.rejects(
+    searchOpportunities(input, 'k', async () => new Response(null, { status: 401 })),
+    /administrator to reconnect/,
+  );
+  const delays: number[] = [];
+  attempts = 0;
+  await searchOpportunities(
+    input,
+    'k',
+    async () =>
+      ++attempts === 1
+        ? new Response(null, { status: 429, headers: { 'Retry-After': '60' } })
+        : empty(),
+    undefined,
+    { sleep: async (ms) => void delays.push(ms) },
+  );
+  assert.deepEqual(delays, [5000]);
+});
+
+test('returns place of performance and award details without null fields', async () => {
+  const result = await searchOpportunities(input, 'k', async () =>
+    Response.json({
+      totalRecords: 1,
+      opportunitiesData: [
+        {
+          noticeId: 'b'.repeat(32),
+          title: 'Award',
+          typeOfSetAside: null,
+          placeOfPerformance: { city: { name: 'Arlington' }, state: { code: 'VA' } },
+          award: { date: '2026-10-01', amount: '1000', awardee: { name: 'Acme', ueiSAM: 'UEI1' } },
+        },
+      ],
+    }),
+  );
+  const [first] = result.opportunities;
+  assert.equal(first?.placeOfPerformance, 'Arlington, VA');
+  assert.deepEqual(first?.award, {
+    date: '2026-10-01',
+    amount: '1000',
+    awardee: 'Acme',
+    awardeeUei: 'UEI1',
+  });
+  assert.ok(!('typeOfSetAside' in first!));
+});
+
+test('key check rejects only definite refusals', async () => {
+  assert.equal((await checkSamKey('k', async () => empty())).status, 'valid');
+  assert.equal(
+    (await checkSamKey('k', async () => new Response(null, { status: 403 }))).status,
+    'rejected',
+  );
+  const limited = await checkSamKey('k', async () => new Response(null, { status: 429 }));
+  assert.equal(limited.status, 'valid');
+  assert.ok('warning' in limited && limited.warning);
+  for (const status of [404, 503])
+    assert.equal(
+      (await checkSamKey('k', async () => new Response(null, { status }))).status,
+      'unverified',
+    );
 });

@@ -55,6 +55,7 @@ test('Better Auth Google sign-in verifies signed identity, invitations, OAuth st
     cookieKeys: [randomBytes(32).toString('base64url')],
     allowLocalHttp: true,
     login,
+    fetcher: async () => Response.json({ totalRecords: 0, opportunitiesData: [] }),
   }).handle;
   const tenantId = randomUUID(),
     clientId = randomUUID(),

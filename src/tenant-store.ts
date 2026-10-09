@@ -67,10 +67,18 @@ export class TenantStore {
   }
 
   async keyFor(principal: Principal): Promise<string | undefined> {
+    return (await this.keyRecord(principal))?.key;
+  }
+
+  async keyRecord(principal: Principal): Promise<{ key: string; savedAt: Date } | undefined> {
     // Membership and credential selection are one query, never a caller-provided tenant ID.
-    const result = await this.pool.query<{ tenant_id: string; sealed: SealedKey }>(
+    const result = await this.pool.query<{
+      tenant_id: string;
+      sealed: SealedKey;
+      updated_at: Date;
+    }>(
       `
-      SELECT t.id AS tenant_id, k.sealed FROM tenant_clients c
+      SELECT t.id AS tenant_id, k.sealed, k.updated_at FROM tenant_clients c
       JOIN tenants t ON t.id = c.tenant_id
       JOIN tenant_memberships m ON m.tenant_id = t.id AND m.issuer = c.issuer
       JOIN tenant_keys k ON k.tenant_id = t.id
@@ -79,7 +87,9 @@ export class TenantStore {
       [principal.issuer, principal.clientId, principal.subject],
     );
     const row = result.rows[0];
-    return row ? this.vault.open(row.tenant_id, row.sealed) : undefined;
+    return row
+      ? { key: this.vault.open(row.tenant_id, row.sealed), savedAt: row.updated_at }
+      : undefined;
   }
 
   async setKey(principal: Principal, key: string): Promise<boolean> {
