@@ -23,14 +23,19 @@ function setup() {
         ['admin', 'member'].includes(p.subject)
           ? { tenantId: 'org-a', role: p.subject === 'admin' ? 'admin' : 'member' }
           : undefined,
-      keyFor: async (p) => (['alice', 'bob'].includes(p.subject) ? `key-${p.subject}` : undefined),
+      keyRecord: async (p) =>
+        ['alice', 'bob'].includes(p.subject)
+          ? { key: `key-${p.subject}`, savedAt: new Date('2026-10-01T00:00:00Z') }
+          : undefined,
       setKey: async (_p, key) => {
         writes.push(key);
         return true;
       },
     },
     fetcher: async (url) => {
-      calls.push(new URL(String(url)).searchParams.get('api_key')!);
+      const key = new URL(String(url)).searchParams.get('api_key')!;
+      calls.push(key);
+      if (key === 'rejected-test-secret') return new Response(null, { status: 403 });
       return Response.json({ totalRecords: 0, opportunitiesData: [] });
     },
   });
@@ -104,9 +109,12 @@ test('admin credential endpoint requires scope and role and never echoes credent
     (await save('admin', { api_key: 'new-test-secret', tenant_id: 'other' })).status,
     400,
   );
+  const rejected = await save('admin', { api_key: 'rejected-test-secret' });
+  assert.equal(rejected.status, 422);
+  assert.ok(!JSON.stringify(await rejected.json()).includes('rejected-test-secret'));
   const response = await save('admin', { api_key: 'new-test-secret' });
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { saved: true, upstream_verified: false });
+  assert.deepEqual(await response.json(), { saved: true, upstream_verified: true });
   assert.deepEqual(writes, ['new-test-secret']);
 });
 

@@ -45,7 +45,14 @@ test('modern client discovers and calls tools without initialization or a sessio
           'Finite stateless service must not advertise subscriptions',
         );
       if (method === 'tools/list') {
-        assert.equal(body.result.tools.length, 1);
+        assert.deepEqual(
+          body.result.tools.map((tool: { name: string }) => tool.name),
+          ['get_sam_opportunities', 'get_sam_key_status'],
+        );
+        for (const tool of body.result.tools) {
+          assert.ok(tool.outputSchema, tool.name);
+          assert.equal(tool.annotations.readOnlyHint, true);
+        }
         assert.ok(!JSON.stringify(body.result.tools).includes('api_key'));
       }
     }
@@ -58,6 +65,11 @@ test('modern client discovers and calls tools without initialization or a sessio
     const body = await response.json();
     assert.equal(body.result.structuredContent.total, 0, JSON.stringify(body));
     assert.equal(body.result.isError, undefined);
+    const status = await (
+      await mcp.fetch(request('tools/call', { name: 'get_sam_key_status', arguments: {} }))
+    ).json();
+    assert.equal(status.result.structuredContent.connected, true, JSON.stringify(status));
+    assert.ok(!JSON.stringify(status).includes('test-key'));
   } finally {
     await mcp.close();
   }

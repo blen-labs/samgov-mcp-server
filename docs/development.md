@@ -51,7 +51,7 @@ After browser authorization:
 ```sh
 npm run inspector:cli -- --method tools/list --format json
 npm run inspector:cli -- --protocol-era legacy --method tools/list --format json
-npm run inspector:cli -- --method tools/call --tool-name get_sam_opportunities --tool-args-json '{"posted_from":"10/01/2026","posted_to":"10/08/2026","limit":2}' --format json
+npm run inspector:cli -- --method tools/call --tool-name get_sam_opportunities --tool-args-json '{"posted_from":"2026-10-01","posted_to":"2026-10-08","limit":2}' --format json
 npm run test:deployed
 ```
 

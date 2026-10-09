@@ -1,10 +1,10 @@
 import { VERSION } from './version.js';
 import { ADMIN_SCOPE, READ_SCOPE, type VerifyToken, type VerifiedPrincipal } from './auth.js';
 import { createSamMcp } from './mcp.js';
-import type { Fetch } from './opportunities.js';
+import { checkSamKey, type Fetch } from './opportunities.js';
 import type { TenantStore } from './tenant-store.js';
 
-type Store = Pick<TenantStore, 'resolve' | 'keyFor' | 'setKey'>;
+type Store = Pick<TenantStore, 'resolve' | 'keyRecord' | 'setKey'>;
 
 export function createApp(config: {
   publicUrl: string;
@@ -105,13 +105,20 @@ export function createApp(config: {
           const key = (body as { api_key?: unknown }).api_key;
           if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{8,4096}$/.test(key))
             return json({ error: 'invalid_credential_format' }, 400);
+          // One small search rejects keys SAM.gov refuses; outages do not block saving.
+          const check = await checkSamKey(key, config.fetcher);
+          if (check.status === 'rejected')
+            return json({ error: 'credential_rejected', message: check.message }, 422);
           if (!(await config.store.setKey(principal, key)))
             return json({ error: 'forbidden' }, 403);
-          // Saving does not imply upstream validation. The next search verifies actual access.
-          return json({ saved: true, upstream_verified: false });
+          return json({
+            saved: true,
+            upstream_verified: check.status === 'valid',
+            ...('warning' in check && check.warning ? { warning: check.warning } : {}),
+          });
         }
-        const key = await config.store.keyFor(principal);
-        if (!key) return json({ error: 'tenant_access_or_credential_unavailable' }, 403);
+        const credential = await config.store.keyRecord(principal);
+        if (!credential) return json({ error: 'tenant_access_or_credential_unavailable' }, 403);
         if (config.allow && !(await config.allow(principal)))
           return json({ error: 'tenant_rate_limit' }, 429, { 'Retry-After': '60' });
         // Restrict this server to finite request/response methods. No subscription stream is exposed.
@@ -156,7 +163,7 @@ export function createApp(config: {
             400,
           );
         }
-        const mcp = createSamMcp(key, config.fetcher);
+        const mcp = createSamMcp(credential.key, config.fetcher, { savedAt: credential.savedAt });
         try {
           const response = await mcp.fetch(request, { parsedBody: parsed });
           // Fully consume finite JSON/SSE responses before closing per-request SDK resources.
