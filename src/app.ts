@@ -114,7 +114,7 @@ export function createApp(config: {
           return json({
             saved: true,
             upstream_verified: check.status === 'valid',
-            ...('warning' in check && check.warning ? { warning: check.warning } : {}),
+            ...(check.warning ? { warning: check.warning } : {}),
           });
         }
         const credential = await config.store.keyRecord(principal);

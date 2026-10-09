@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   checkSamKey,
   opportunityInput,
+  SamError,
   searchOpportunities,
   type Fetch,
 } from '../src/opportunities.js';
@@ -244,12 +245,29 @@ test('retries transient upstream failures but not 404, with actionable errors', 
     'k',
     async () =>
       ++attempts === 1
-        ? new Response(null, { status: 429, headers: { 'Retry-After': '60' } })
+        ? new Response(null, { status: 429, headers: { 'Retry-After': '3' } })
         : empty(),
     undefined,
     { sleep: async (ms) => void delays.push(ms) },
   );
-  assert.deepEqual(delays, [5000]);
+  assert.deepEqual(delays, [3000]);
+  delays.length = 0;
+  attempts = 0;
+  await assert.rejects(
+    searchOpportunities(
+      input,
+      'k',
+      async () => {
+        attempts++;
+        return new Response(null, { status: 429, headers: { 'Retry-After': '60' } });
+      },
+      undefined,
+      { sleep: async (ms) => void delays.push(ms) },
+    ),
+    (error: SamError) => error.code === 'RATE_LIMITED' && error.retryAfter === '60',
+  );
+  assert.equal(attempts, 1, 'must not retry before a long Retry-After cooldown ends');
+  assert.deepEqual(delays, []);
 });
 
 test('returns place of performance and award details without null fields', async () => {
