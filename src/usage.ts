@@ -6,7 +6,7 @@ export type Consume = (
   bucket: string,
   max: number,
   seconds: number,
-) => Promise<{ allowed: boolean; retryAfter: number }>;
+) => Promise<{ allowed: boolean; retryAfter: number; firstRefusal: boolean }>;
 
 // Sorts object keys so equal arguments sent in a different key order hash identically.
 function stable(value: unknown): unknown {
@@ -34,14 +34,17 @@ export class RepeatGuard {
     private now = () => Date.now(),
   ) {}
 
-  /** Records the call; returns seconds until it may repeat, or 0 when allowed. */
-  check(tenantId: string, name: string, args: unknown): number {
+  /**
+   * Records the call; returns seconds until it may repeat, or 0 when allowed. Counted per
+   * actor when one is given, so members of one organization do not trip each other.
+   */
+  check(tenantId: string, name: string, args: unknown, actor?: string): number {
     const now = this.now();
     if (this.seen.size > 10_000)
       for (const [k, v] of this.seen) if (v.resetsAt <= now) this.seen.delete(k);
     if (this.seen.size > 10_000) this.seen.clear();
     const key = createHash('sha256')
-      .update(JSON.stringify([tenantId, name, stable(args)]))
+      .update(JSON.stringify([tenantId, actor ?? null, name, stable(args)]))
       .digest('base64url');
     const entry = this.seen.get(key);
     if (!entry || entry.resetsAt <= now) {
@@ -69,8 +72,9 @@ export function createUsageLimits(options: {
   return async (
     tenantId: string,
     call: { name: string; arguments: unknown },
+    actor?: string,
   ): Promise<Refusal | undefined> => {
-    const wait = repeat.check(tenantId, call.name, call.arguments);
+    const wait = repeat.check(tenantId, call.name, call.arguments, actor);
     if (wait)
       return {
         code: 'REPEATED_CALL',
@@ -79,8 +83,9 @@ export function createUsageLimits(options: {
       };
     const day = await options.consume(`tenant-day:${tenantId}`, options.dailyLimit, 86_400);
     if (!day.allowed) {
-      // Never include arguments: they can contain what the organization is searching for.
-      alert({ event: 'tenant_daily_limit_reached', tenant_id: tenantId });
+      // Once per window, not per refused call. Never include arguments: they can contain
+      // what the organization is searching for.
+      if (day.firstRefusal) alert({ event: 'tenant_daily_limit_reached', tenant_id: tenantId });
       return {
         code: 'DAILY_LIMIT',
         message: `This organization has used its ${options.dailyLimit} SAM.gov requests for the day. Retry after ${day.retryAfter} seconds, or ask the service operator to raise the limit.`,

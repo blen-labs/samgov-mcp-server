@@ -19,6 +19,9 @@ const keyStatusOutput = z.object({
   note: z.string(),
 });
 
+/** The only tool that reaches SAM.gov; usage limits apply to it. */
+export const SEARCH_TOOL = 'get_sam_opportunities';
+
 export function createSamMcp(apiKey: string, fetcher?: Fetch, credential: { savedAt?: Date } = {}) {
   return createMcpHandler(
     () => {
@@ -29,7 +32,7 @@ export function createSamMcp(apiKey: string, fetcher?: Fetch, credential: { save
         },
       );
       server.registerTool(
-        'get_sam_opportunities',
+        SEARCH_TOOL,
         {
           title: 'Search SAM.gov opportunities',
           description:

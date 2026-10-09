@@ -10,6 +10,7 @@ import { createBroker } from './oauth.js';
 import { createLogin } from './better-login.js';
 import { requestListener } from './http.js';
 import { createUsageLimits } from './usage.js';
+import { SEARCH_TOOL } from './mcp.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -44,7 +45,7 @@ async function main() {
   await store.migrate();
   const oauth = new OAuthStore(pool, vault);
   // Placeholder default until commercial consumption terms are set; operators override it.
-  const dailyLimit = Number(process.env.TENANT_DAILY_SEARCH_LIMIT ?? 1000);
+  const dailyLimit = Number(process.env.TENANT_DAILY_SEARCH_LIMIT || 1000);
   if (!Number.isInteger(dailyLimit) || dailyLimit < 1)
     throw new Error('TENANT_DAILY_SEARCH_LIMIT must be a positive integer.');
   const limits = createUsageLimits({
@@ -99,9 +100,12 @@ async function main() {
       },
       limitToolCall: async (principal, call) => {
         // Only searches reach SAM.gov; the key status tool is local.
-        if (call.name !== 'get_sam_opportunities') return undefined;
+        if (call.name !== SEARCH_TOOL) return undefined;
         const membership = await store.resolve(principal);
-        return membership ? limits(membership.tenantId, call) : undefined;
+        // Repeats are counted per signed-in user; the daily cap is per organization.
+        return membership
+          ? limits(membership.tenantId, call, JSON.stringify([principal.issuer, principal.subject]))
+          : undefined;
       },
     }),
   );

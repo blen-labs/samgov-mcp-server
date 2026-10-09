@@ -36,8 +36,8 @@ No LLM runs in this service. Railway's own compliance attestations and uptime co
 
 - 60 tool requests per organization per minute; 120 OAuth requests per IP per minute.
 - A per-organization daily search cap (`TENANT_DAILY_SEARCH_LIMIT`, default 1000), with an operator log alert when it is reached.
-- Repeated identical searches (more than 5 in 10 minutes) are refused, stopping assistant loops before they reach SAM.gov.
-- SAM.gov retries are bounded (at most 3 attempts in 40 seconds) and honor SAM.gov's `Retry-After`; the service does not route around SAM.gov's quotas.
+- Repeated identical searches by one user (more than 5 in 10 minutes) are refused, stopping assistant loops before they reach SAM.gov.
+- SAM.gov retries are bounded (at most 3 attempts per search, each limited to 20 seconds, with waits capped at 5 seconds) and honor SAM.gov's `Retry-After`; the service does not route around SAM.gov's quotas.
 
 ## Change monitoring
 

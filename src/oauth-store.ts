@@ -197,17 +197,24 @@ export class OAuthStore {
     return (await this.consume(bucket, max, seconds)).allowed;
   }
 
-  /** Counts one use of a fixed window; retryAfter is the whole seconds until it resets. */
+  /**
+   * Counts one use of a fixed window; retryAfter is the whole seconds until it resets.
+   * firstRefusal is true for exactly one call per window: the first one over the limit.
+   */
   async consume(bucket: string, max: number, seconds: number) {
     const result = await this.pool.query<{ count: number; retry_after: number }>(
       `INSERT INTO rate_windows(bucket,count,resets_at) VALUES($1,1,now()+$2*interval '1 second')
-      ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN rate_windows.resets_at<=now() THEN 1 ELSE LEAST(rate_windows.count+1,$3::integer+1) END,
+      ON CONFLICT(bucket) DO UPDATE SET count=CASE WHEN rate_windows.resets_at<=now() THEN 1 ELSE LEAST(rate_windows.count+1,$3::integer+2) END,
       resets_at=CASE WHEN rate_windows.resets_at<=now() THEN now()+$2*interval '1 second' ELSE rate_windows.resets_at END
       RETURNING count, GREATEST(1, CEIL(EXTRACT(EPOCH FROM resets_at-now())))::integer AS retry_after`,
       [digest(bucket), seconds, max],
     );
     const row = result.rows[0]!;
-    return { allowed: row.count <= max, retryAfter: row.retry_after };
+    return {
+      allowed: row.count <= max,
+      retryAfter: row.retry_after,
+      firstRefusal: row.count === max + 1,
+    };
   }
 
   async revokeTenant(tenantId: string, accountId?: string) {
